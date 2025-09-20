@@ -65,6 +65,97 @@ void BBEPAPER::setAddrWindow(int x, int y, int w, int h)
     bbepSetAddrWindow(&_bbep, x, y, w, h);
 }
 
+int BBEPAPER::begin(int iProduct)
+{
+int rc = BBEP_ERROR_BAD_PARAMETER;
+
+    switch (iProduct) {
+        case EPD_LILYGO_S3_MINI: // DC:12 CS:13 RST: 11 BUSY: 10 SCK: 14 MOSI: 15
+            if (setPanelType(EP102_80x128) == BBEP_SUCCESS) {
+                initIO(12, 11, 10, 13, 15, 14, 8000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+        case EPD_BADGER2040: // DC:20 CS:17 RST:21 BUSY: 26 PWR: 10
+            if (setPanelType(EP29_128x296) == BBEP_SUCCESS) {
+                initIO(20, 21, 26, 17, -1, -1, 12000000);
+                setRotation(270);
+                pinMode(10, OUTPUT);
+                digitalWrite(10, HIGH); // keep power turned on
+                return BBEP_SUCCESS;
+            }
+            break;
+        case EPD_TRMNL_OG: // DC:5 CS:6 RST:10 BUSY:4 MOSI:8 SCK:7
+            if (setPanelType(EP75_800x480) == BBEP_SUCCESS) {
+                initIO(5, 10, 4, 6, 8, 7, 10000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+
+        case EPD_RETERMINAL_SPECTRA: // Seeed Studio 7.3" color E1002
+            // DC:11 RST:12 BUSY:13 CS:10 MOSI:9 SCK:7
+            if (setPanelType(EP73_SPECTRA_800x480) == BBEP_SUCCESS) {
+                initIO(11, 12, 13, 10, 9, 7, 10000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+
+        case EPD_CROWPANEL154: // DC:13 CS:14 RST:10 BUSY:9 MOSI:11 SCK:12
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType(EP154Z_152x152) == BBEP_SUCCESS) {
+                initIO(13, 10, 9, 14, 11, 12, 12000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+        case EPD_CROWPANEL579:
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType(EP579_792x272) == BBEP_SUCCESS) {
+                initIO(46, 47, 48, 45, 11, 12, 12000000);
+                return BBEP_SUCCESS;
+            }   
+            break;
+        case EPD_CROWPANEL37:
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType(EP37B_240x416) == BBEP_SUCCESS) {
+                initIO(46, 47, 48, 45, 11, 12, 12000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+        case EPD_CROWPANEL42: // DC:46 CS:45 RST:47 BUSY:48 MOSI:11 SCK:12
+            pinMode(7, OUTPUT); 
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType(EP42B_400x300) == BBEP_SUCCESS) {
+                initIO(46, 47, 48, 45, 11, 12, 12000000);
+                return BBEP_SUCCESS;
+            }
+            break;
+        case EPD_CROWPANEL29: // DC:46 CS:45 RST:47 BUSY:48 MOSI:11 SCK:12
+        case EPD_CROWPANEL29_4GRAY:
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType((iProduct == EPD_CROWPANEL29) ? EP29Z_128x296 : EP29Z_128x296_4GRAY) == BBEP_SUCCESS) {
+                initIO(46, 47, 48, 45, 11, 12, 12000000);
+                setRotation(270);
+                return BBEP_SUCCESS;
+            } 
+            break;
+        case EPD_CROWPANEL213:
+        case EPD_CROWPANEL213_4GRAY:
+            pinMode(7, OUTPUT);
+            digitalWrite(7, HIGH); // screen power on
+            if (setPanelType((iProduct == EPD_CROWPANEL213) ? EP213Z_122x250 : EP213Z_122x250_4GRAY) == BBEP_SUCCESS) {
+                initIO(13, 10, 9, 14, 11, 12, 12000000);
+                setRotation(270);
+                return BBEP_SUCCESS;
+            } 
+            break;
+    } // switch on product type
+    return rc;
+} /* begin() */
+
 int BBEPAPER::setPanelType(int iPanel)
 {
     return bbepSetPanelType(&_bbep, iPanel);

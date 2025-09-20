@@ -45,12 +45,14 @@ enum {
     BBEP_ERROR_COUNT
 };
 
+#ifndef __ONEBITDISPLAY__
 typedef struct {
     int x; 
     int y;
     int w; 
     int h;
 } BB_RECT; 
+#endif
 
 #define LIGHT_SLEEP 0
 #define DEEP_SLEEP 1
@@ -82,7 +84,8 @@ enum {
     PLANE_1,
     PLANE_BOTH,
     PLANE_DUPLICATE, // duplicate 0 to both 0 and 1
-    PLANE_0_TO_1 // send plane 0 to plane 1 memory
+    PLANE_0_TO_1, // send plane 0 to plane 1 memory
+    PLANE_FALSE_DIFF, // use 'partial' mode to force all pixels to update
 };
 #ifndef __ONEBITDISPLAY__
 // 5 possible font sizes: 8x8, 16x32, 6x8, 12x16 (stretched from 6x8 with smoothing), 16x16 (stretched from 8x8)
@@ -111,6 +114,24 @@ typedef struct epd_panel {
     const uint8_t *pColorLookup; // color translation table
 } EPD_PANEL;
 
+// Products with built-in SPI EPDs
+enum {
+    EPD_PRODUCT_UNDEFINED=0,
+    EPD_BADGER2040,
+    EPD_LILYGO_S3_MINI,
+    EPD_TRMNL_OG,
+    EPD_CROWPANEL29,
+    EPD_CROWPANEL29_4GRAY,
+    EPD_CROWPANEL213,
+    EPD_CROWPANEL213_4GRAY,
+    EPD_CROWPANEL42,
+    EPD_CROWPANEL37,
+    EPD_CROWPANEL154,
+    EPD_CROWPANEL579,
+    EPD_RETERMINAL_SPECTRA,
+    EPD_PRODUCT_COUNT
+};
+
 // Display types
 enum {
     EP_PANEL_UNDEFINED=0,
@@ -121,6 +142,7 @@ enum {
     EP293_128x296,
     EP294_128x296, // Waveshare newer 2.9" 1-bit 128x296
     EP295_128x296, // harvested from Solum 2.9" BW ESLs
+    EP295_128x296_4GRAY,
     EP266_152x296, // GDEY0266T90
     EP102_80x128, // GDEW0102T4
     EP27B_176x264, // GDEY027T91
@@ -130,11 +152,13 @@ enum {
     EP42R_400x300,
     EP42R2_400x300, // GDEQ042Z21
     EP37_240x416, // GDEY037T03
+    EP37B_240x416, // CROWPANEL 3.7"
     EP213_104x212, // InkyPHAT 2.13 black and white
     EP75_800x480, // GDEY075T7
     EP75_800x480_4GRAY, // GDEW075T7 in 4 grayscale mode
     EP75_800x480_4GRAY_OLD, // GDEY075T7 in 4 grayscale mode
     EP29_128x296, // Pimoroni Badger2040
+    EP29_128x296_4GRAY, // Pimoroni Badger2040
     EP213R_122x250, // Inky phat 2.13 B/W/R
     EP154_200x200, // waveshare
     EP154B_200x200, // DEPG01540BN
@@ -155,6 +179,19 @@ enum {
     EP41_640x400, // EInk ED040TC1 SPI UC81xx
     EP81_SPECTRA_1024x576, // Spectra 8.1" 1024x576 6-colors
     EP7_960x640, // ED070EC1
+    EP213R2_122x250, // UC8151 3-color
+    EP29Z_128x296, // SSD1680 (CrowPanel 2.9")
+    EP29Z_128x296_4GRAY, // SSD1680 (CrowPanel 2.9")
+    EP213Z_122x250, // SSD1680 (CrowPanel 2.13")
+    EP213Z_122x250_4GRAY, // CrowPanel 2.13" 4 gray mode
+    EP154Z_152x152, // CrowPanel 1.54"
+    EP579_792x272, // CrowPanel 5.79"
+    EP213YR_122x250, // GDEY0213F52
+    EP37YR_240x416, // GDEM037F51
+    EP35YR_184x384, // GDEM035F51
+    EP397YR_800x480, // GDEM0397F81
+    EP154YR_200x200, // GDEM0154F51H
+    EP266YR2_184x360, // GDEY0266F52H
     EP_PANEL_COUNT
 };
 #ifdef FUTURE
@@ -189,12 +226,12 @@ enum {
 #define BBEP_4COLOR   0x0008
 #define BBEP_4GRAY    0x0010
 #define BBEP_7COLOR   0x0020
-#define BBEP_16GRAY   0x0020
-#define BBEP_CS_EVERY_BYTE 0x0040
-#define BBEP_PARTIAL2 0x0080
-#define BBEP_4BPP_DATA 0x0100
-#define BBEP_SPLIT_BUFFER 0x0200
-#define BBEP_HAS_SECOND_PLANE 0x0400
+#define BBEP_16GRAY   0x0040
+#define BBEP_CS_EVERY_BYTE 0x0080
+#define BBEP_PARTIAL2 0x0100
+#define BBEP_4BPP_DATA 0x0200
+#define BBEP_SPLIT_BUFFER 0x0400
+#define BBEP_HAS_SECOND_PLANE 0x0800
 
 #define BBEP_BLACK 0
 #define BBEP_WHITE 1
@@ -377,6 +414,7 @@ enum {
 #endif
 
 #define BUSY_WAIT 0xff
+#define EPD_RESET 0xfe
 
 // Normal pixel drawing function pointer
 typedef int (BB_SET_PIXEL)(void *pBBEP, int x, int y, unsigned char color);
@@ -422,10 +460,12 @@ class BBEPAPER
 #endif // __LINUX__
 {
   public:
+    BBEPAPER(void) { memset(&_bbep, 0, sizeof(_bbep)); }
     BBEPAPER(int iPanel);
     int createVirtual(int iWidth, int iHeight, int iFlags);
     void setAddrWindow(int x, int y, int w, int h);
     int setPanelType(int iPanel);
+    int begin(int iProduct);
     void setCS2(uint8_t cs);
     bool hasFastRefresh();
     bool hasPartialRefresh();
