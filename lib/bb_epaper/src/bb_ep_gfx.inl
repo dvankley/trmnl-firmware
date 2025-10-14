@@ -19,8 +19,10 @@
 //
 #ifndef __BB_EP_GFX__
 #define __BB_EP_GFX__
+#include "bb_epaper.h"
 #include "Group5.h"
 #include "g5dec.inl"
+#include "../../trmnl/include/trmnl_log.h"
 
 static G5DECIMAGE g5dec;
 // forward declarations
@@ -1891,6 +1893,7 @@ void bbepGetStringBox(BBEPDISP *pBBEP, BB_FONT *pFont, const char *szMsg, int *w
 int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
 {
 #ifndef NO_RAM
+    Log_info_serial("bbepAllocBuffer: RAM block");
     int iSize;
     if (pBBEP->iFlags & (BBEP_7COLOR | BBEP_16GRAY)) { // 4-bpp
         iSize = (pBBEP->native_width >> 1) * pBBEP->native_height;
@@ -1901,22 +1904,27 @@ int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
             pBBEP->iFlags |= BBEP_HAS_SECOND_PLANE;
         }
     }
+    Log_info_serial("bbepAllocBuffer: trying to allocate %d; second plane: %d", iSize, bDoubleSize);
 #if defined (HAL_ESP32_HAL_H_) && !defined(__riscv)
     if (iSize > 98000) { // need to use PSRAM
-//#ifndef BOARD_HAS_PSRAM
-//#error "Please enable PSRAM!"
-//#endif
+#ifndef BOARD_HAS_PSRAM
+#error "Please enable PSRAM!"
+#endif
+    Log_info_serial("bbepAllocBuffer: ps_malloc");
         pBBEP->ucScreen = (uint8_t *)ps_malloc(iSize);
     } else {
+    Log_info_serial("bbepAllocBuffer: malloc");
         pBBEP->ucScreen = (uint8_t *)malloc(iSize);
     }
 #else // not ESP32 or no PSRAM
+    Log_info_serial("bbepAllocBuffer: no PSRAM; malloc");
     pBBEP->ucScreen = (uint8_t *)malloc(iSize);
 #endif // ESP32
     if (pBBEP->ucScreen != NULL) {
         return BBEP_SUCCESS;
     }
 #endif
+    Log_info_serial("bbepAllocBuffer: memory allocation failed");
     return BBEP_ERROR_NO_MEMORY; // failed
 } /* bbepAllocBuffer() */
 //

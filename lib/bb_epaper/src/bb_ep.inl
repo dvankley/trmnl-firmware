@@ -17,6 +17,9 @@
 //
 #ifndef __BB_EP__
 #define __BB_EP__
+
+#include "../../trmnl/include/trmnl_log.h"
+
 // forward declarations
 void InvertBytes(uint8_t *pData, uint8_t bLen);
 void bbepSetPixelFast4Clr(void *pb, int x, int y, unsigned char ucColor);
@@ -2470,6 +2473,19 @@ const uint8_t epd73_spectra_init[] PROGMEM = {
     0
 };
 
+const uint8_t epd75r_init_dvk_default[] PROGMEM = {
+    6, 0x01, 0x07,0x17,0x3a,0x3a,0x03, // power setting
+    1, 0x04, // power on
+    BUSY_WAIT,
+    2, 0x00, 0x0f, // panel setting
+    5, 0x61, 0x03,0x20,0x01,0xe0, // resolution 800x480
+    2, 0x15, 0x00,
+    3, 0x50, 0x11, 0x07, // VCOM
+    2, 0x60, 0x22, // TCON
+    5, 0x65, 0x00, 0x00, 0x00, 0x00, // start row/col
+    0
+};
+
 const uint8_t epd75r_init[] PROGMEM = {
     5, 0x01, 0x07,0x07,0x3f,0x3f, // power setting
     1, 0x04, // power on
@@ -2594,7 +2610,7 @@ const EPD_PANEL panelDefs[] PROGMEM = {
     {800, 480, 0, epd73_spectra_init, NULL, NULL,  BBEP_7COLOR, BBEP_CHIP_UC81xx, u8Colors_spectra}, // EP73_800x480 Spectra 6 7-color 800x480
     {640, 384, 0, epd74r_init, NULL, NULL,  BBEP_3COLOR | BBEP_4BPP_DATA, BBEP_CHIP_UC81xx, u8Colors_3clr}, // EP74R_640x384, 3-color 640x384
     {600, 448, 0, epd583r_init, NULL, NULL,  BBEP_3COLOR | BBEP_4BPP_DATA, BBEP_CHIP_UC81xx, u8Colors_3clr}, // EP583R_600x448, 3-color 600x448
-    {800, 480, 0, epd75r_init, NULL, NULL, BBEP_3COLOR | BBEP_RED_SWAPPED, BBEP_CHIP_UC81xx, u8Colors_3clr}, // EP75R_800x480, waveshare 7.5 800x480 B/W/R
+    {800, 480, 0, epd75r_init_dvk_default, NULL, NULL, BBEP_3COLOR | BBEP_RED_SWAPPED, BBEP_CHIP_UC81xx, u8Colors_3clr}, // EP75R_800x480, waveshare 7.5 800x480 B/W/R
     {800, 480, 0, epd426_init_full, epd426_init_fast, epd426_init_part, 0, BBEP_CHIP_SSD16xx, u8Colors_2clr},
     {800, 480, 0, epd426g_init, NULL, NULL, BBEP_4GRAY, BBEP_CHIP_SSD16xx, u8Colors_4gray}, // 2-bit grayscale mode
     {128, 296, 0, epd29r2_init_sequence_full, NULL, NULL, BBEP_RED_SWAPPED | BBEP_3COLOR, BBEP_CHIP_UC81xx, u8Colors_3clr}, // EP29R2_128x296 Adafruit 2.9" 128x296 Tricolor FeatherWing
@@ -2728,11 +2744,15 @@ void bbepWaitBusy(BBEPDISP *pBBEP)
     if (pBBEP->iBUSYPin == 0xff) return;
     delay(10); // give time for the busy status to be valid
     uint8_t busy_idle =  (pBBEP->chip_type == BBEP_CHIP_UC81xx) ? HIGH : LOW;
+    Log_info_serial("bbepWaitBusy: waiting for pin %d to be %d", pBBEP->iBUSYPin, busy_idle);
     delay(1); // some panels need a short delay before testing the BUSY line
     while (iTimeout < 5000) {
         if (digitalRead(pBBEP->iBUSYPin) == busy_idle) break;
         // delay(1);
-        bbepLightSleep(200); // save battery power by checking every 200ms
+        Log_info_serial("bbepWaitBusy: waiting");
+        iTimeout += 200;
+        delay(200);
+        // bbepLightSleep(200); // save battery power by checking every 200ms
     }
 } /* bbepWaitBusy() */
 //
@@ -2928,13 +2948,17 @@ void bbepSendCMDSequence(BBEPDISP *pBBEP, const uint8_t *pSeq)
     while (s[0] != 0) { // A 0 length terminates the list
         iLen = *s++;
         if (iLen == BUSY_WAIT) {
+            Log_info_serial("bbepSendCMDSequence: busy wait");
             bbepWaitBusy(pBBEP);
         } else if (iLen == EPD_RESET) {
+            Log_info_serial("bbepSendCMDSequence: reset");
             bbepWakeUp(pBBEP);
         } else {
+            Log_info_serial("bbepSendCMDSequence: write command %h", s[0]);
             bbepWriteCmd(pBBEP, s[0]);
             s++;
             if (iLen > 1) {
+            Log_info_serial("bbepSendCMDSequence: write data");
                 bbepWriteData(pBBEP, s, iLen-1);
                 s += (iLen-1);
             }
@@ -3083,6 +3107,7 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
     
     switch (iMode) {
         case REFRESH_FULL:
+            Log_info_serial("bbepRefresh: full");
             bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
             if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {
                // Send the same sequence to the second controller
@@ -3093,12 +3118,15 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
             break;
         case REFRESH_FAST:
             if (!pBBEP->pInitFast) { // fall back to full
+                Log_info_serial("bbepRefresh: fast requested, but falling back to full");
                 bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
-            } else if (!pBBEP->iFlags & BBEP_4COLOR) {
+            } else if (!(pBBEP->iFlags & BBEP_4COLOR)) {
+                Log_info_serial("bbepRefresh: fast");
                 bbepSendCMDSequence(pBBEP, pBBEP->pInitFast);
             }
             break;
         case REFRESH_PARTIAL:
+            Log_info_serial("bbepRefresh: partial");
             if (!pBBEP->pInitPart)
                 return BBEP_ERROR_BAD_PARAMETER;
             bbepSendCMDSequence(pBBEP, pBBEP->pInitPart);
@@ -3107,27 +3135,37 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
             return BBEP_ERROR_BAD_PARAMETER;
     } // switch on mode
     if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
+        Log_info_serial("bbepRefresh: BBEP_CHIP_UC81xx");
         if (pBBEP->iFlags & (BBEP_4GRAY | BBEP_4COLOR | BBEP_7COLOR)) {
+            Log_info_serial("bbepRefresh: > 2 colors");
             bbepCMD2(pBBEP, UC8151_DRF, 0x00);
             if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {
+                Log_info_serial("bbepRefresh: split buffer");
                // Send the same sequence to the second controller
                pBBEP->iCSPin = pBBEP->iCS2Pin;
                bbepCMD2(pBBEP, UC8151_DRF, 0);
                pBBEP->iCSPin = pBBEP->iCS1Pin;
             }
         } else {
-            bbepWriteCmd(pBBEP, UC8151_PTOU); // partial out (update the entire panel, not just the last memory window)
+            Log_info_serial("bbepRefresh: <= 2 colors");
+            if (pBBEP->pInitPart) {
+                Log_info_serial("bbepRefresh: sending UC8151_PTOU");
+                bbepWriteCmd(pBBEP, UC8151_PTOU); // partial out (update the entire panel, not just the last memory window)
+            }
             bbepWriteCmd(pBBEP, UC8151_DRF);
         }
     } else {
+        Log_info_serial("bbepRefresh: non BBEP_CHIP_UC81xx");
         const uint8_t u8CMD[4] = {0xf7, 0xc7, 0xff, 0xc0}; // normal, fast, partial, partial2
         const uint8_t u8CMDz[4] = {0xf4, 0xc7, 0xfc, 0}; // special set for SSD1680
         const uint8_t u8CMDz2[4] = {0xf4, 0xc7, 0xdc, 0}; // special set #2 for SSD1680
         const uint8_t u8CMDz3[4] = {0xf7, 0xc7, 0xdc, 0}; // special set #3
         if (pBBEP->iFlags & (BBEP_4GRAY | BBEP_3COLOR | BBEP_4COLOR)) {
+            Log_info_serial("bbepRefresh: iMode = REFRESH_FAST");
             iMode = REFRESH_FAST;
         } // 3/4-color = 0xc7
         if (iMode == REFRESH_PARTIAL && pBBEP->iFlags & BBEP_PARTIAL2) {
+            Log_info_serial("bbepRefresh: iMode = REFRESH_PARTIAL2");
             iMode = REFRESH_PARTIAL2; // special case for custom LUT
         }
         if (pBBEP->type == EP29Z_128x296 || pBBEP->type == EP213Z_122x250) {
@@ -3139,6 +3177,7 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
         } else {
             bbepCMD2(pBBEP, SSD1608_DISP_CTRL2, u8CMD[iMode]);
         }
+        Log_info_serial("bbepRefresh: writing SSD1608_MASTER_ACTIVATE");
         bbepWriteCmd(pBBEP, SSD1608_MASTER_ACTIVATE); // refresh
     }
     return BBEP_SUCCESS;

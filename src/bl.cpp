@@ -35,7 +35,8 @@
 #include <nvs.h>
 #include <serialize_log.h>
 #include <preferences_persistence.h>
-#include "logo_small.h"
+// #include "logo_small.h"
+#include "bwr_test_image.h"
 #include "loading.h"
 #include <wifi-helpers.h>
 
@@ -109,12 +110,17 @@ void wait_for_serial()
  */
 void bl_init(void)
 {
-
   Serial.begin(115200);
   Log.begin(LOG_LEVEL_VERBOSE, &Serial);
   Log_info("BL init success");
+    Log_info_serial("Hello early serial"); // avoids storage/submission paths
   pins_init();
   vBatt = readBatteryVoltage(); // Read the battery voltage BEFORE WiFi is turned on
+
+    // while (1) {
+    //   delay(2000);
+    // Log_info("BLARP"); // avoids storage/submission paths
+    // }
 
 #if defined(BOARD_SEEED_XIAO_ESP32C3)
   delay(2000);
@@ -238,6 +244,7 @@ void bl_init(void)
   display_init();
 
   // Mount SPIFFS
+  Log.info("Filesystem init\n");
   filesystem_init();
 
   if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
@@ -245,7 +252,7 @@ void bl_init(void)
     Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
 
   
-    display_show_image(storedLogoOrDefault(1), DEFAULT_IMAGE_SIZE, false);
+    display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
 
 
     need_to_refresh_display = 1;
@@ -308,7 +315,7 @@ void bl_init(void)
 
     Log_info("FW version %s", FW_VERSION_STRING);
 
-    showMessageWithLogo(WIFI_CONNECT, "", false, FW_VERSION_STRING, "");
+    // showMessageWithLogo(WIFI_CONNECT, "", false, FW_VERSION_STRING, "");
     WifiCaptivePortal.setResetSettingsCallback(resetDeviceCredentials);
     res = WifiCaptivePortal.startPortal();
     if (!res)
@@ -822,7 +829,7 @@ static https_request_err_e downloadAndShow()
             {
               writeImageToFile("/current.bmp", buffer, content_size);
             }
-            Log.info("Free heap at before display - %d", ESP.getMaxAllocHeap());
+            Log.info("Free heap at before display - %d", ESP.getFreeHeap());
             display_show_image(buffer, content_size, true);
 
             // Using filename from API response
@@ -2063,7 +2070,7 @@ static uint8_t *storedLogoOrDefault(int iType)
 //    return buffer;
 //  }
   if (iType == 0) {
-    return const_cast<uint8_t *>(logo_small);
+    return const_cast<uint8_t *>(bwr_test);
   } else {
     // Force the loading screen to always use the slower update method because
     // we don't know (yet) if the panel can handle the faster update modes

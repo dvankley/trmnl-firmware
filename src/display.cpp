@@ -10,9 +10,10 @@
 #include "bb_epaper.h"
 //#define ONE_BIT_PANEL EP426_800x480
 //#define TWO_BIT_PANEL EP426_800x480_4GRAY
+#define WAVESHARE_3_COLOR EP75R_800x480
 #define ONE_BIT_PANEL EP75_800x480
 #define TWO_BIT_PANEL EP75_800x480_4GRAY_OLD
-BBEPAPER bbep(ONE_BIT_PANEL);
+BBEPAPER bbep(WAVESHARE_3_COLOR);
 // Counts the number of partial updates to know when to do a full update
 RTC_DATA_ATTR int iUpdateCount = 0;
 #else
@@ -374,12 +375,19 @@ void ReduceBpp(int iDestBpp, int iPixelType, uint8_t *pPalette, uint8_t *pSrc, u
  */
 int png_draw(PNGDRAW *pDraw)
 {
+    static bool hasLogged = false;
     int x;
     uint8_t ucBppChanged = 0, ucInvert = 0;
     uint8_t uc, ucMask, src, *s, *d, *pTemp = bbep.getCache(); // get some scratch memory (not from the stack)
 
+    if (!hasLogged) {
+        Log_info("png_draw pixel type: %d; bpp: %d; ", pDraw->iPixelType, pDraw->iBpp);
+    }
     if (pDraw->iPixelType == PNG_PIXEL_INDEXED || pDraw->iBpp > 2) {
         if (pDraw->iBpp == 1) { // 1-bit output, just see which color is brighter
+            if (!hasLogged) {
+                Log_info("1bpp indexed");
+            }
             uint32_t u32Gray0, u32Gray1;
             u32Gray0 = pDraw->pPalette[0] + (pDraw->pPalette[1]<<2) + pDraw->pPalette[2];
             u32Gray1 = pDraw->pPalette[3] + (pDraw->pPalette[4]<<2) + pDraw->pPalette[5];
@@ -387,13 +395,20 @@ int png_draw(PNGDRAW *pDraw)
             ucInvert = 0xff;
           }
         } else {
+            if (!hasLogged) {
+                Log_info("bpp > 2; reducing to 1 or 2 bpp");
+            }
             // Reduce the source image to 1-bpp or 2-bpp
             ReduceBpp((pDraw->pUser) ? 2:1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, pTemp, pDraw->iWidth, pDraw->iBpp);
             ucBppChanged = 1;
         }
     } else if (pDraw->iBpp == 2) {
+        if (!hasLogged) {
+            Log_info("2bpp indexed; inverting for 4 gray");
+        }
         ucInvert = 0xff; // 2-bit non-palette images need to be inverted colors for 4-gray mode
     }
+    hasLogged = true;
     s = (ucBppChanged) ? pTemp : (uint8_t *)pDraw->pPixels;
     d = pTemp;
     if (!pDraw->pUser) {
@@ -528,13 +543,17 @@ PNG *png = new PNG();
     png->close();
     if (rc == PNG_SUCCESS) {
         if (png->getWidth() != bbep.width() || png->getHeight() != bbep.height()) {
-            Log_error("PNG image size doesn't match display size");
+            Log_error("PNG image size %d x %d doesn't match display size %d x %d", png->getWidth(), png->getHeight(), bbep.width(), bbep.height());
             rc = -1;
         } else { // okay to decode
-            Log_info("%s [%d]: Decoding %d-bpp png (current)\r\n", __FILE__, __LINE__, png->getBpp());
+            Log_info("%s [%d]: Decoding %d-bpp png (current)", __FILE__, __LINE__, png->getBpp());
+            auto iPngColorCount = png_count_colors(png, pPNG, iDataSize);
             // Prepare target memory window (entire display)
             bbep.setAddrWindow(0, 0, bbep.width(), bbep.height());
-            if (png->getBpp() == 1 || (png->getBpp() == 2 && png_count_colors(png, pPNG, iDataSize) == 2)) { // 1-bit image (single plane)
+            if (png->getBpp() == 1 || (png->getBpp() == 2 && iPngColorCount == 2)) {
+                Log_info("Drawing monochrome image");
+                // If the image is 1 bit per pixel, or 2 bits per pixel but only contains 2 colors and is thus still monochrome
+                // It's a 1-bit image (single plane)
                 bbep.setPanelType(ONE_BIT_PANEL);
                 rc = REFRESH_PARTIAL; // the new image is 1bpp - try a partial update
                 bbep.startWrite(PLANE_0); // start writing image data to plane 0
@@ -549,21 +568,61 @@ PNG *png = new PNG();
                     }
                 }
                 png->close();
-            } else { // 2-bpp
-                bbep.setPanelType(TWO_BIT_PANEL);
-                rc = REFRESH_FULL; // 4gray mode must be full refresh
-                iUpdateCount = 0; // grayscale mode resets the partial update counter
+            } else if (png->getBpp() == 2 && iPngColorCount == 3) {
+                Log_info("Drawing 3 color image");
+                // If the image is 2 bits per pixel and 3 colors, it's a 3 color display B/W/R
+
                 bbep.startWrite(PLANE_0); // start writing image data to plane 0
                 iPlane = 0;
-                Log_info("%s [%d]: decoding 4-gray plane 0\r\n", __FILE__, __LINE__);
+                Log_info("Writing plane 0 B\\W");
                 png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
-                png->decode(&iPlane, 0); // tell PNGDraw to use bits for plane 0
+                if (png->decode(&iPlane, 0) != PNG_SUCCESS) {
+                    Log_error("Plane 0 decode failed: %d", png->getLastError());
+                    png->close();
+                    return -1;
+                }
                 png->close(); // start over for plane 1
                 iPlane = 1;
-                Log_info("%s [%d]: decoding 4-gray plane 1\r\n", __FILE__, __LINE__);
+                Log_info("Writing plane 1 R");
                 png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
                 bbep.startWrite(PLANE_1); // start writing image data to plane 1
-                png->decode(&iPlane, 0); // decode it again to get plane 1 data
+                if (png->decode(&iPlane, 0) != PNG_SUCCESS) {
+                    Log_error("Plane 1 decode failed: %d", png->getLastError());
+                    png->close();
+                    return -1;
+                }
+
+                bbep.writePlane();
+
+                // bbep.loadG5Image(smiley_bwr, 0, 160, 0,0,1.0f);
+                // bbep.writePlane();
+                // bbep.refresh(REFRESH_FULL);
+                // bbep.wait();
+            } else if (png->getBpp() == 2 && iPngColorCount == 4) {
+                // TODO: could be B/W/R/Y or 4-gray. To be implemented
+                Log_info("4 color image not yet implemented");
+                rc = -1;
+                // bbep.setPanelType(WAVESHARE_3_COLOR);
+                // rc = REFRESH_FULL; // 4gray mode must be full refresh
+                // iUpdateCount = 0; // grayscale mode resets the partial update counter
+                // bbep.startWrite(PLANE_0); // start writing image data to plane 0
+                // iPlane = 0;
+                // Log_info("%s [%d]: decoding 4-gray plane 0", __FILE__, __LINE__);
+                // png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
+                // png->decode(&iPlane, 0); // tell PNGDraw to use bits for plane 0
+                // png->close(); // start over for plane 1
+                // iPlane = 1;
+                // Log_info("%s [%d]: decoding 4-gray plane 1", __FILE__, __LINE__);
+                // png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
+                // bbep.startWrite(PLANE_1); // start writing image data to plane 1
+                // png->decode(&iPlane, 0); // decode it again to get plane 1 data
+            } else if ((png->getBpp() == 3 || png->getBpp() == 8) && (iPngColorCount == 7 || iPngColorCount == 6)) {
+                // TODO: ACEP 7 or Spectra 6 to be implemented
+                Log_info("6 and 7 color images not yet implemented");
+                rc = -1;
+            } else {
+                Log_info("Unhandled display configuration");
+                rc = -1;
             }
         }
     }
@@ -579,7 +638,9 @@ PNG *png = new PNG();
 void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
 
 {
-    bool isPNG = data_size >= 4 && MOTOLONG(image_buffer) == (int32_t)0x89504e47;;
+    Log_info("display_show_image start. Data size: %d; wait: %d", data_size, bWait);
+    Log_info("image buffer start: %X%X%X%X", image_buffer[0], image_buffer[1], image_buffer[2], image_buffer[3]);
+    bool isPNG = data_size >= 4 && MOTOLONG(image_buffer) == (int32_t)0x89504e47;
     auto width = display_width();
     auto height = display_height();
 //    uint32_t *d32;
@@ -587,7 +648,6 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
     int iRefreshMode = REFRESH_FULL; // assume full (slow) refresh
 
    // Log_info("Paint_NewImage %d", reverse);
-    Log_info("display_show_image start");
     Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
 #ifdef FUTURE
     if (reverse)
@@ -614,22 +674,52 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
     {
         if (*(uint16_t *)image_buffer == BB_BITMAP_MARKER)
         {
-            // G5 compressed image
+            Log_info("G5 compressed image");
             BB_BITMAP *pBBB = (BB_BITMAP *)image_buffer;
 #ifdef BB_EPAPER
             bbep.allocBuffer(false);
             bAlloc = true;
 #endif
-            int x = (width - pBBB->width)/2;
-            int y = (height - pBBB->height)/2; // center it
-            if (x > 0 || y > 0) // only clear if the image is smaller than the display
-            {
-                bbep.fillScreen(BBEP_WHITE); 
-            }     
-            bbep.loadG5Image(image_buffer, x, y, BBEP_WHITE, BBEP_BLACK);
-        } 
+            const int panel_w = width;
+            const int panel_h = height;
+            if (pBBB->width <= 0 || pBBB->height <= 0 ||
+                pBBB->width > 8192 || pBBB->height > 8192) {
+                Log_fatal("G5 header invalid: %dx%d", pBBB->width, pBBB->height);
+                ESP.restart();
+            }
+            int x = (panel_w - pBBB->width)/2;
+            int y = (panel_h - pBBB->height)/2;
+            if (pBBB->width > panel_w || pBBB->height > panel_h) {
+                Log_fatal("G5 image too large for panel: %dx%d > %dx%d", pBBB->width, pBBB->height, panel_w, panel_h);
+                // Option A: scale down using bbep.loadG5Image(..., scale)
+                // Option B: implement a clipped blit (preferred for safety)
+                // Until clipping is implemented, refuse to draw to avoid overflow:
+                ESP.restart();
+            }
+
+            const int frame_bytes = ((panel_w + 7) >> 3) * panel_h;
+            const bool width_byte_aligned = pBBB->width % 8 == 0;
+            const bool x_byte_aligned = x % 8 == 0;
+
+            if (pBBB->width != panel_w || pBBB->height != panel_h) {
+                Log_fatal("G5 not full-frame: %dx%d, panel=%dx%d", pBBB->width, pBBB->height, panel_w, panel_h);
+                ESP.restart();
+            }
+
+            if (!width_byte_aligned || !x_byte_aligned) {
+                Log_info("G5 placement not byte-aligned (w=%d, x=%d). Drawing at (0,0) to avoid overrun.", pBBB->width, x);
+                // Optional: clear to white if image smaller than panel
+                bbep.fillScreen(BBEP_WHITE);
+                bbep.loadG5Image(image_buffer, 0, 0, BBEP_WHITE, BBEP_BLACK);
+            } else {
+                if (x > 0 || y > 0) bbep.fillScreen(BBEP_WHITE);
+                bbep.loadG5Image(image_buffer, x, y, BBEP_WHITE, BBEP_BLACK);
+            }
+        }
         else 
         {
+        Log_info("BMP image");
+        Log_info("Hacky flip and set buffer");
          // This work-around is due to a lack of RAM; the correct method would be to use loadBMP()
             flip_image(image_buffer+62, bbep.width(), bbep.height(), false); // fix bottom-up bitmap images
 #ifdef BB_EPAPER
@@ -643,7 +733,7 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
     Log_info("Display refresh start");
 #ifdef BB_EPAPER
     if ((iUpdateCount & 7) == 0 || apiDisplayResult.response.maximum_compatibility == true) {
-        Log_info("%s [%d]: Forcing full refresh; desired refresh mode was: %d\r\n", __FILE__, __LINE__, iRefreshMode);
+        Log_info("%s [%d]: Forcing full refresh; desired refresh mode was: %d", __FILE__, __LINE__, iRefreshMode);
         iRefreshMode = REFRESH_FULL; // force full refresh every 8 partials
     }
     int refresh_seconds = preferences.getUInt(PREFERENCES_SLEEP_TIME_KEY, SLEEP_TIME_TO_SLEEP);
@@ -653,8 +743,9 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
         iRefreshMode = REFRESH_FAST;
     }
     if (!bWait) iRefreshMode = REFRESH_PARTIAL; // fast update when showing loading screen
-    Log_info("%s [%d]: EPD refresh mode: %d\r\n", __FILE__, __LINE__, iRefreshMode);
+    Log_info("%s [%d]: EPD refresh mode: %d", __FILE__, __LINE__, iRefreshMode);
     bbep.refresh(iRefreshMode, bWait);
+    Log_info("display_show_image near end; freeing buffer: %d", bAlloc);
     if (bAlloc) {
         bbep.freeBuffer();
     }
@@ -908,17 +999,17 @@ void display_show_msg(uint8_t *image_buffer, MSG message_type)
  */
 void display_show_msg(uint8_t *image_buffer, MSG message_type, String friendly_id, bool id, const char *fw_version, String message)
 {
-    Log_info("Free heap in display_show_msg - %d", ESP.getMaxAllocHeap());
+    Log_info("Free heap in display_show_msg - %d", ESP.getFreeHeap());
     Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
 #ifdef BB_EPAPER
     bbep.allocBuffer(false);
-    Log_info("Free heap after bbep.allocBuffer() - %d", ESP.getMaxAllocHeap());
+    Log_info("Free heap after bbep.allocBuffer(): %d", ESP.getFreeHeap());
 #endif
 
     if (message_type == WIFI_CONNECT)
     {
-        Log_info("Display set to white");
-        bbep.fillScreen(BBEP_WHITE);
+        Log_info("Display set to black");
+        bbep.fillScreen(BBEP_BLACK);
 #ifdef BB_EPAPER
         bbep.writePlane(PLANE_0);
         if (!apiDisplayResult.response.maximum_compatibility) {

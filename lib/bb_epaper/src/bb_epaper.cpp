@@ -196,8 +196,12 @@ int BBEPAPER::refresh(int iMode, bool bWait)
     int rc;
     long l = millis();
     rc = bbepRefresh(&_bbep, iMode);
-    if (rc == BBEP_SUCCESS && bWait) {
-        bbepWaitBusy(&_bbep);
+    if (rc == BBEP_SUCCESS) {
+        if (bWait) {
+            bbepWaitBusy(&_bbep);
+        }
+    } else {
+        Log_info("BBEPAPER::refresh failed with code %d", rc);
     }
     _bbep.iOpTime = (int)(millis() - l);
     return rc;
@@ -237,7 +241,12 @@ void BBEPAPER::backupPlane(void)
 }
 int BBEPAPER::allocBuffer(bool bSecondPlane)
 {
-    return bbepAllocBuffer(&_bbep, (int)bSecondPlane);
+    auto retCode = bbepAllocBuffer(&_bbep, (int)bSecondPlane);
+    if (retCode != BBEP_SUCCESS) {
+        Log_fatal("EPD buffer alloc failed");
+        ESP.restart();
+    }
+    return retCode;
 } /* allocBuffer() */
 
 uint8_t * BBEPAPER::getCache(void)
