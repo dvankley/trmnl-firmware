@@ -20,6 +20,8 @@
 
 #include <Arduino.h>
 #include <SPI.h>
+
+#include "bb_epaper.h"
 #include "../../trmnl/include/trmnl_log.h"
 
 // foreward references
@@ -98,7 +100,7 @@ void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, ui
 // Before we can start sending pixels, many panels need to know the display resolution
     Log_info_serial("bbepInitIO: init ");
     bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
-    if (pBBEP->iFlags & BBEP_7COLOR) { // need to send before you can send it data
+    if (pBBEP->iFlags & BBEP_FULL_COLOR) { // need to send before you can send it data
         if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {    
             Log_info_serial("bbepInitIO: split buffer init");
            // Send the same sequence to the second controller

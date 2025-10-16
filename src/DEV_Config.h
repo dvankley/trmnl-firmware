@@ -111,16 +111,16 @@
    #define EPD_RST_PIN  12
    #define EPD_DC_PIN   11
    #define EPD_BUSY_PIN 13
-#elif defined(BOARD_DVK_WAVESHARE_1)
-   // Pin definition for DVK's initial Waveshare driver board
+#elif defined(BOARD_GOOD_DISPLAY_ESP32E6_E01)
+   // Pin definition for Dalian Good Display's ESP32E6-E01 dev board
    #define EPD_SCK_PIN  12
    #define EPD_MOSI_PIN 11
-   #define EPD_CS_PIN   10
-   #define EPD_RST_PIN  13
-   #define EPD_DC_PIN   14
-   #define EPD_BUSY_PIN 21
+   #define EPD_CS_PIN   2
+   #define EPD_RST_PIN  4
+   #define EPD_DC_PIN   3
+   #define EPD_BUSY_PIN 5
 #else
-   #error "Board type not defined. Please define BOARD_WAVESHARE_ESP32_DRIVER or BOARD_TRMNL or BOARD_SEEED_XIAO_ESP32C3 or BOARD_SEEED_XIAO_ESP32S3 or BOARD_DVK_WAVESHARE_1 in platformio.ini build_flags."
+   #error "Board type not defined. Please define BOARD_WAVESHARE_ESP32_DRIVER or BOARD_TRMNL or BOARD_SEEED_XIAO_ESP32C3 or BOARD_SEEED_XIAO_ESP32S3 or BOARD_GOOD_DISPLAY_ESP32E6_E01 in platformio.ini build_flags."
 #endif
 
 #define GPIO_PIN_SET   1

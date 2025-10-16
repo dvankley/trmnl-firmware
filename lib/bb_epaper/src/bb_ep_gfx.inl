@@ -1895,7 +1895,7 @@ int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
 #ifndef NO_RAM
     Log_info_serial("bbepAllocBuffer: RAM block");
     int iSize;
-    if (pBBEP->iFlags & (BBEP_7COLOR | BBEP_16GRAY)) { // 4-bpp
+    if (pBBEP->iFlags & (BBEP_FULL_COLOR | BBEP_16GRAY)) { // 4-bpp
         iSize = (pBBEP->native_width >> 1) * pBBEP->native_height;
     } else { // B/W or B/W/R or B/W/R/Y
         iSize = ((pBBEP->native_width+7)>>3) * pBBEP->native_height;
@@ -1906,16 +1906,16 @@ int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
     }
     Log_info_serial("bbepAllocBuffer: trying to allocate %d; second plane: %d", iSize, bDoubleSize);
 #if defined (HAL_ESP32_HAL_H_) && !defined(__riscv)
-    if (iSize > 98000) { // need to use PSRAM
-#ifndef BOARD_HAS_PSRAM
-#error "Please enable PSRAM!"
-#endif
-    Log_info_serial("bbepAllocBuffer: ps_malloc");
-        pBBEP->ucScreen = (uint8_t *)ps_malloc(iSize);
-    } else {
+//     if (iSize > 98000) { // need to use PSRAM
+// #ifndef BOARD_HAS_PSRAM
+// #error "Please enable PSRAM!"
+// #endif
+//     Log_info_serial("bbepAllocBuffer: ps_malloc");
+//         pBBEP->ucScreen = (uint8_t *)ps_malloc(iSize);
+//     } else {
     Log_info_serial("bbepAllocBuffer: malloc");
         pBBEP->ucScreen = (uint8_t *)malloc(iSize);
-    }
+    // }
 #else // not ESP32 or no PSRAM
     Log_info_serial("bbepAllocBuffer: no PSRAM; malloc");
     pBBEP->ucScreen = (uint8_t *)malloc(iSize);

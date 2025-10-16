@@ -219,6 +219,19 @@ int BBEPAPER::refresh(int iMode, bool bWait)
 //
 // Create a RAM-only virtual display
 //
+
+const uint8_t* BBEPAPER::getColorLookup() {
+    return _bbep.pColorLookup;
+}
+
+const uint32_t* BBEPAPER::getRgbColorLookup() {
+    return _bbep.pRgbColorLookup;
+}
+
+int BBEPAPER::getColorCount() {
+    return _bbep.iColorCount;
+}
+
 int BBEPAPER::createVirtual(int iWidth, int iHeight, int iFlags)
 {
     return bbepCreateVirtual(&_bbep, iWidth, iHeight, iFlags);
@@ -632,7 +645,7 @@ int BBEPAPER::testPanelType(void)
 void BBEPAPER::wake(void)
 {
     bbepWakeUp(&_bbep);
-    if (_bbep.iFlags & BBEP_7COLOR) { // need to send before you can send it data
+    if (_bbep.iFlags & BBEP_FULL_COLOR) { // need to send before you can send it data
         bbepSendCMDSequence(&_bbep, _bbep.pInitFull);
         if (_bbep.iFlags & BBEP_SPLIT_BUFFER) { // dual cable EPD
             _bbep.iCSPin = _bbep.iCS2Pin;
@@ -666,7 +679,7 @@ void BBEPAPER::drawString(const char *pText, int x, int y)
 
 void BBEPAPER::setPlane(int iPlane)
 {
-    if (_bbep.iFlags & (BBEP_3COLOR | BBEP_4COLOR | BBEP_4GRAY | BBEP_7COLOR)) return; // only valid for 1-bit mode
+    if (_bbep.iFlags & (BBEP_3COLOR | BBEP_4COLOR | BBEP_4GRAY | BBEP_FULL_COLOR)) return; // only valid for 1-bit mode
 
     _bbep.iPlane = iPlane;
 }

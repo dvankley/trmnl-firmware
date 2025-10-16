@@ -6,6 +6,7 @@
 #ifndef __ESP_IDF_IO__
 #define __ESP_IDF_IO__
 
+#include "bb_epaper.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
@@ -280,7 +281,7 @@ void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, ui
     ret=spi_bus_add_device(ESP32_SPI_HOST, &devcfg, &spi); // attach to bus
     assert(ret==ESP_OK);
     
-    if (pBBEP->iFlags & BBEP_7COLOR) { // need to send before you can send it data
+    if (pBBEP->iFlags & BBEP_FULL_COLOR) { // need to send before you can send it data
         pBBEP->is_awake = 1;
         bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
 //        if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) { 

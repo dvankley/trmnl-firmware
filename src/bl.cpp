@@ -113,7 +113,6 @@ void bl_init(void)
   Serial.begin(115200);
   Log.begin(LOG_LEVEL_VERBOSE, &Serial);
   Log_info("BL init success");
-    Log_info_serial("Hello early serial"); // avoids storage/submission paths
   pins_init();
   vBatt = readBatteryVoltage(); // Read the battery voltage BEFORE WiFi is turned on
 
@@ -249,16 +248,16 @@ void bl_init(void)
 
   if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
   {
-    Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
-
-  
-    display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
-
-
-    need_to_refresh_display = 1;
-    preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
-    Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
-    preferences.putString(PREFERENCES_FILENAME_KEY, "");
+    // Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
+    //
+    //
+    // display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
+    //
+    //
+    // need_to_refresh_display = 1;
+    // preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
+    // Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
+    // preferences.putString(PREFERENCES_FILENAME_KEY, "");
   }
 
   Log_info("Firmware version %s", FW_VERSION_STRING);
@@ -1579,7 +1578,13 @@ static bool performApiSetup()
   {
     Log_info("MAC Address is not registered on server");
 
-    showMessageWithLogo(MAC_NOT_REGISTERED, apiResponse);
+    // showMessageWithLogo(MAC_NOT_REGISTERED, apiResponse);
+      Log.info("%s [%d]: Display test image start\r\n", __FILE__, __LINE__);
+
+      display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
+
+      need_to_refresh_display = 1;
+      Log.info("%s [%d]: Display test image end\r\n", __FILE__, __LINE__);
 
     preferences.putUInt(PREFERENCES_SLEEP_TIME_KEY, SLEEP_TIME_TO_SLEEP);
 

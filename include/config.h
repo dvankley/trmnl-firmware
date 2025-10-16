@@ -88,9 +88,9 @@ enum WIFI_CONNECT_RETRY_TIME // Time to sleep before trying to connect to the Wi
 #define PIN_INTERRUPT 3         //the green button
 #define PIN_VBAT_SWITCH 21      //load switch enable pin for battery voltage measurement
 #define VBAT_SWITCH_LEVEL HIGH  //load switch enable pin active level
-#elif defined(BOARD_DVK_WAVESHARE_1)
-#define DEVICE_MODEL "DVK Waveshare BWR"
-#define PIN_INTERRUPT 1         //IN 1
+#elif defined(BOARD_GOOD_DISPLAY_ESP32E6_E01)
+#define DEVICE_MODEL "good_display_esp32e6_e01"
+#define PIN_INTERRUPT 46         // Corresponds to SW2
 #define FAKE_BATTERY_VOLTAGE    // I should probably connect the battery to an ADC input in the next version
 #endif
 

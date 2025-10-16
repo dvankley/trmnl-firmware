@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <ArduinoLog.h>
 #include <display.h>
 #include <PNGdec.h>
 #include <SPIFFS.h>
@@ -10,10 +11,10 @@
 #include "bb_epaper.h"
 //#define ONE_BIT_PANEL EP426_800x480
 //#define TWO_BIT_PANEL EP426_800x480_4GRAY
-#define WAVESHARE_3_COLOR EP75R_800x480
+// #define WAVESHARE_3_COLOR EP75R_800x480
 #define ONE_BIT_PANEL EP75_800x480
 #define TWO_BIT_PANEL EP75_800x480_4GRAY_OLD
-BBEPAPER bbep(WAVESHARE_3_COLOR);
+BBEPAPER bbep(EP73_SPECTRA_800x480);
 // Counts the number of partial updates to know when to do a full update
 RTC_DATA_ATTR int iUpdateCount = 0;
 #else
@@ -33,6 +34,23 @@ FASTEPD bbep;
 extern char filename[];
 extern Preferences preferences;
 extern ApiDisplayResult apiDisplayResult;
+
+int paletteMapSize;
+/**
+ * Mapping from indexed PNG palette to display palette.
+ * Each pixel in an indexed PNG is an index value in the PNG's palette that corresponds
+ *  to the pixel's color code.
+ * This array allows direct translation from the PNG's pixel values/palette indexes into
+ *  the color codes expected by the display.
+ * This array's value at a given index should be the display's color code that corresponds
+ *  to the PNG's palette entry at that index.
+ *
+ * Example:
+ * - PNG palette: [0xff0000, 0x0000ff] (red and blue)
+ * - Display palette: first 6 of u8Colors_spectra6
+ * This array would then be: [0x03, 0x05] (spectra 6 color codes for red and blue)
+ */
+uint8_t paletteMap[MAX_COLOR_COUNT];
 
 /**
  * @brief Function to init the display
@@ -368,7 +386,8 @@ void ReduceBpp(int iDestBpp, int iPixelType, uint8_t *pPalette, uint8_t *pSrc, u
         *d++ = u8;
     }
 } /* ReduceBpp() */
-/** 
+
+/**
  * @brief Callback function for each line of PNG decoded
  * @param PNGDRAW structure containing the current line and relevant info
  * @return none
@@ -383,34 +402,103 @@ int png_draw(PNGDRAW *pDraw)
     if (!hasLogged) {
         Log_info("png_draw pixel type: %d; bpp: %d; ", pDraw->iPixelType, pDraw->iBpp);
     }
-    if (pDraw->iPixelType == PNG_PIXEL_INDEXED || pDraw->iBpp > 2) {
-        if (pDraw->iBpp == 1) { // 1-bit output, just see which color is brighter
-            if (!hasLogged) {
-                Log_info("1bpp indexed");
-            }
-            uint32_t u32Gray0, u32Gray1;
-            u32Gray0 = pDraw->pPalette[0] + (pDraw->pPalette[1]<<2) + pDraw->pPalette[2];
-            u32Gray1 = pDraw->pPalette[3] + (pDraw->pPalette[4]<<2) + pDraw->pPalette[5];
-          if (u32Gray0 < u32Gray1) {
+    if (pDraw->iPixelType == PNG_PIXEL_INDEXED && pDraw->iBpp == 1) {
+        // 1-bit output, just see which color is brighter
+        if (!hasLogged) {
+            Log_info("1bpp indexed");
+        }
+        uint32_t u32Gray0, u32Gray1;
+        u32Gray0 = pDraw->pPalette[0] + (pDraw->pPalette[1]<<2) + pDraw->pPalette[2];
+        u32Gray1 = pDraw->pPalette[3] + (pDraw->pPalette[4]<<2) + pDraw->pPalette[5];
+        if (u32Gray0 < u32Gray1) {
             ucInvert = 0xff;
-          }
-        } else {
+        }
+    } else if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() | BBEP_FULL_COLOR)) {
+        // "full" "color" display with indexed PNG (happy path for color displays)
+        if (!hasLogged) {
+            Log_info("Indexed PNG with full color display");
+        }
+
+        if (paletteMapSize == 0) {
             if (!hasLogged) {
-                Log_info("bpp > 2; reducing to 1 or 2 bpp");
+                Log_error("png_draw attempting to decode indexed PNG without palette map defined.");
             }
-            // Reduce the source image to 1-bpp or 2-bpp
-            ReduceBpp((pDraw->pUser) ? 2:1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, pTemp, pDraw->iWidth, pDraw->iBpp);
-            ucBppChanged = 1;
+            return 0;
         }
     } else if (pDraw->iBpp == 2) {
         if (!hasLogged) {
-            Log_info("2bpp indexed; inverting for 4 gray");
+            Log_info("2bpp non-indexed; inverting for 4 gray");
         }
         ucInvert = 0xff; // 2-bit non-palette images need to be inverted colors for 4-gray mode
+    } else if (pDraw->iBpp > 2) {
+        if (!hasLogged) {
+            Log_info("bpp > 2; reducing to 1 or 2 bpp");
+        }
+        // Reduce the source image to 1-bpp or 2-bpp
+        ReduceBpp((pDraw->pUser) ? 2:1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, pTemp, pDraw->iWidth, pDraw->iBpp);
+        ucBppChanged = 1;
     }
     hasLogged = true;
     s = (ucBppChanged) ? pTemp : (uint8_t *)pDraw->pPixels;
     d = pTemp;
+    // Handle indexed-color PNG rows for full-color-capable EPDs by translating
+    // PNG palette indices -> EPD 4-bpp color codes using paletteMap, then pack
+    // two pixels per byte (even x in high nibble, odd x in low nibble).
+    if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() & BBEP_FULL_COLOR)) {
+        // int i;
+        // int iPitch, iSize;
+        // uint8_t u8;
+        // BBEPDISP *pBBEP = (BBEPDISP *)pb;
+        //
+        // // only available for local buffer operations
+        // if (!pBBEP || !pBBEP->ucScreen) return BBEP_ERROR_BAD_PARAMETER;
+        // ucColor = pBBEP->pColorLookup[ucColor & 0xf]; // translate the color for this display type
+        //
+        // iPitch = pBBEP->width >> 1;
+        // iSize = (pBBEP->native_width >> 1) * pBBEP->native_height;
+        //
+        // i = (x >> 1) + (y * iPitch);
+        // if (x < 0 || x >= pBBEP->width || i < 0 || i > iSize-1) { // off the screen
+        //     pBBEP->last_error = BBEP_ERROR_BAD_PARAMETER;
+        //     return BBEP_ERROR_BAD_PARAMETER;
+        // }
+        // u8 = pBBEP->ucScreen[i];
+        // if (x & 1) {
+        //     u8 &= 0xf0;
+        //     u8 |= ucColor;
+        // } else {
+        //     u8 &= 0x0f;
+        //     u8 |= (ucColor << 4);
+        // }
+        // pBBEP->ucScreen[i] = u8;
+
+
+        int width = pDraw->iWidth;
+        int outLen = (width + 1) >> 1; // 2 pixels per byte
+
+        const uint8_t *srcRow = s;   // 8-bit palette index per pixel from PNGdec
+        uint8_t *dstRow = pTemp;     // output buffer to transmit to EPD
+
+        x = 0;
+        for (int i = 0; i < outLen; ++i) {
+            // First (even) pixel -> high nibble
+            uint8_t idx0 = (x < width) ? srcRow[x++] : 0;
+            uint8_t c0 = (idx0 < paletteMapSize) ? (paletteMap[idx0] & 0x0F) : 0x0; // default to 0 (usually white)
+
+            // Second (odd) pixel -> low nibble
+            uint8_t idx1 = (x < width) ? srcRow[x++] : 0;
+            uint8_t c1 = (idx1 < paletteMapSize) ? (paletteMap[idx1] & 0x0F) : 0x0;
+
+            dstRow[i] = (uint8_t)((c0 << 4) | c1);
+            // Log.info("%X", dstRow[i]);
+        }
+
+        esp_log_buffer_hex("png_line start", pTemp, 5);
+        esp_log_buffer_hex("png_line end", pTemp + outLen - 5, 5);
+        // Send the packed 4-bpp row to the panel and return; skip 1/2-bpp paths below
+        bbep.writeData(pTemp, outLen);
+        return 1;
+    }
     if (!pDraw->pUser) {
         // 1-bit output, decode the single plane and write it
         for (x=0; x<pDraw->iWidth; x+= 8) {
@@ -459,6 +547,158 @@ int png_draw(PNGDRAW *pDraw)
     bbep.writeData(pTemp, (pDraw->iWidth+7)/8);
     return 1;
 } /* png_draw() */
+
+/**
+ * Simple linear array search.
+ *
+ * @param array Search array (haystack)
+ * @param size Size of the search array
+ * @param targetValue Value to search for (needle)
+ * @return Index of target value in array, or -1 if not found.
+ */
+static int uint32_array_search(const uint32_t *array, int size, uint32_t targetValue) {
+    for (int i = 0; i < size; ++i) {
+        if (array[i] == targetValue) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
+    return
+    // Blue
+    (pTripletStart[0]) |
+    // Green
+    (pTripletStart[1] << 8) |
+    // Red
+    (pTripletStart[2] << 16);
+}
+
+/**
+ * Gets the number of actually used entries in the palette (PNG PLTE) table by the crude
+ *  means of just iterating through the array until we find a null entry.
+ * Future improvement: store the size of the palette in PNGDRAW on image decode so we
+ *  don't have to do this crap.
+ *
+ * TODO: write a unit test for this once I can sort out the tooling
+ * @param pPalette PNGDRAW::pPalette pointer. 768 bytes where each set of 3 bytes is
+ *  blue, green, red values to define a single color in the palette.
+ * Bytes 769-1024 are alpha values, but we don't care about those for this application.
+ * @return number of actually used entries (colors) in the palette.
+ */
+static int get_palette_size(uint8_t *pPalette) {
+    if (!pPalette) {
+        return -1;
+    }
+    // Stop only on a 0,0,0 triplet that is immediately
+    // followed by another 0,0,0 (or we're at the last entry). This treats
+    // a single 0,0,0 (true black) followed by non-zero as a valid color.
+    int count = 0;
+    for (int i = 0; i < 256; ++i) {
+        const int idx = i * 3;
+        if (png_palette_triplet_to_rgb888(&pPalette[idx]) == 0) {
+            // Peek at the next triplet if available
+            if (i >= 255) { // no next triplet; treat as terminator
+                break;
+            }
+            int nextIdx = idx + 3;
+            if (png_palette_triplet_to_rgb888(&pPalette[nextIdx]) == 0) {
+                // Two consecutive null triplets -> end of palette
+                break;
+            }
+            // Single 0,0,0 followed by non-zero -> count it (black) and continue
+            ++count;
+            continue;
+        }
+        ++count;
+    }
+    return count;
+}
+
+/**
+ * Builds the paletteMap global variable and sets the corresponding paletteMapSize global variable.
+ *
+ * For "full" "color" displays, this function must be called before attempting to decode
+ *  and write to the EPD display.
+ *
+ * The assumption here is that for "full color" displays, the server should only ever
+ *  provide PNG images with color mode = indexed, where the palette exactly corresponds
+ *  to the model's display's palette. This is because the server is expected to do all
+ *  necessary processing to prepare the image for the EPD, specifically quantization/dithering.
+ *
+ *
+ * @param displayPngPalette Array of PNG color codes supported by the current model's display.
+ * @param displayColorCodes Array of display color codes supported by the current model's display.
+ *  Indexes match displayPngPalette.
+ * @param displayPaletteSize Size of displayPngPalette and displayColorCodes.
+ * @param pngPalette Array of palette values defined in the indexed PNG file being decoded
+ */
+static void build_palette_map(
+    // const uint32_t displayPngPalette[],
+    // const uint8_t displayColorCodes[],
+    // int displayPaletteSize,
+    uint8_t pngPalette[]
+) {
+    int pngPaletteSize = get_palette_size(pngPalette);
+    if (pngPaletteSize <= 0) {
+        Log_error("Unable to determine palette size for indexed PNG");
+        // TODO: restart the MCU or something more fatal
+        return;
+    }
+
+    // Validate that the PNG's palette is the same size as the display's palette
+    if (pngPaletteSize != bbep.getColorCount()) {
+        // If it's not, we'll still give it a go, but this is not expected behavior.
+        Log_error("WARNING: PNG palette size %d does not equal the palette size expected by this model's display %d",
+            pngPaletteSize, bbep.getColorCount());
+    }
+
+    int i = 0;
+
+    // Iterate over all PNG palette entries
+    for (i = 0; i < pngPaletteSize; ++i) {
+        uint32_t pngPaletteEntry = png_palette_triplet_to_rgb888(&pngPalette[i]);
+        // Find the PNG palette entry in the display's list of supported PNG color codes
+        int displayPngPaletteIndex = uint32_array_search(bbep.getRgbColorLookup(), bbep.getColorCount(), pngPaletteEntry);
+
+        if (displayPngPaletteIndex < 0) {
+            // PNG palette entry is not supported by the display
+            Log_error("WARNING: PNG palette entry %d with index %d is not in the device's supported color list."
+                " PNG pixels with this palette's entry index will be drawn to the display as blank.",
+                pngPaletteEntry,
+                i
+            );
+            paletteMap[i] = 0x00;
+            continue;
+        }
+
+        // Write to the palette map
+        paletteMap[i] = bbep.getColorLookup()[displayPngPaletteIndex];
+    }
+
+    paletteMapSize = i;
+}
+
+// static void build_palette_map(PNG *png) {
+//     // TODO: move this mapping into #defines
+//     if (bbep.capabilities() | BBEP_7COLOR) {
+//         build_palette_map_for_device(
+//             acep_7clr_rgb_palette,
+//             u8Colors_7clr,
+//             7,
+//             png->getPalette()
+//         );
+//     } else if (bbep.capabilities() | BBEP_SPECTRA_6COLOR) {
+//         build_palette_map_for_device(
+//             spectra_6clr_rgb_palette,
+//             u8Colors_spectra6,
+//             6,
+//             png->getPalette()
+//         );
+//     }
+//     // TODO: } else if (bbep.capabilities() | BBEP_SPECTRA_9COLOR) {
+// }
 
 //
 // A table to accelerate the testing of 2-bit images for the number
@@ -546,8 +786,9 @@ PNG *png = new PNG();
             Log_error("PNG image size %d x %d doesn't match display size %d x %d", png->getWidth(), png->getHeight(), bbep.width(), bbep.height());
             rc = -1;
         } else { // okay to decode
-            Log_info("%s [%d]: Decoding %d-bpp png (current)", __FILE__, __LINE__, png->getBpp());
+            bool bDisplayIsFullColor = bbep.capabilities() & BBEP_FULL_COLOR;
             auto iPngColorCount = png_count_colors(png, pPNG, iDataSize);
+            Log_info("%s [%d]: Decoding %d-bpp png with %d colors; display supports >= 6 colors: %d", __FILE__, __LINE__, png->getBpp(), iPngColorCount, bDisplayIsFullColor);
             // Prepare target memory window (entire display)
             bbep.setAddrWindow(0, 0, bbep.width(), bbep.height());
             if (png->getBpp() == 1 || (png->getBpp() == 2 && iPngColorCount == 2)) {
@@ -568,7 +809,7 @@ PNG *png = new PNG();
                     }
                 }
                 png->close();
-            } else if (png->getBpp() == 2 && iPngColorCount == 3) {
+            } else if (png->getBpp() == 2 && iPngColorCount == 3 && !bDisplayIsFullColor) {
                 Log_info("Drawing 3 color image");
                 // If the image is 2 bits per pixel and 3 colors, it's a 3 color display B/W/R
 
@@ -598,7 +839,7 @@ PNG *png = new PNG();
                 // bbep.writePlane();
                 // bbep.refresh(REFRESH_FULL);
                 // bbep.wait();
-            } else if (png->getBpp() == 2 && iPngColorCount == 4) {
+            } else if (png->getBpp() == 2 && iPngColorCount == 4 && !bDisplayIsFullColor) {
                 // TODO: could be B/W/R/Y or 4-gray. To be implemented
                 Log_info("4 color image not yet implemented");
                 rc = -1;
@@ -616,10 +857,23 @@ PNG *png = new PNG();
                 // png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
                 // bbep.startWrite(PLANE_1); // start writing image data to plane 1
                 // png->decode(&iPlane, 0); // decode it again to get plane 1 data
-            } else if ((png->getBpp() == 3 || png->getBpp() == 8) && (iPngColorCount == 7 || iPngColorCount == 6)) {
-                // TODO: ACEP 7 or Spectra 6 to be implemented
-                Log_info("6 and 7 color images not yet implemented");
-                rc = -1;
+            } else if ((png->getBpp() >= 1 && png->getBpp() <= 8) && bDisplayIsFullColor) {
+                Log_info("Drawing %d color image to 'full color' display", iPngColorCount);
+
+                // Build palette map in global memory
+                // TODO: change PNGdec to accept palette map as a callback parameter so it's not always
+                //  sitting around in global memory even when not needed.
+                build_palette_map(png->getPalette());
+
+                bbep.startWrite(PLANE_0); // start writing image data to plane 0
+                png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
+                if (png->decode(&iPlane, 0) != PNG_SUCCESS) {
+                    Log_error("Plane 0 decode failed: %d", png->getLastError());
+                    png->close();
+                    return -1;
+                }
+                png->close(); // start over for plane 1
+                // bbep.writePlane();
             } else {
                 Log_info("Unhandled display configuration");
                 rc = -1;
@@ -667,8 +921,15 @@ void display_show_image(uint8_t *image_buffer, int data_size, bool bWait)
 #endif
     if (isPNG == true && data_size < MAX_IMAGE_SIZE)
     {
+        Log_info("White fill");
+        bbep.fillScreen(BBEP_WHITE);
         Log_info("Drawing PNG");
         iRefreshMode = png_to_epd(image_buffer, data_size);
+        if (iRefreshMode == -1) {
+            Log_fatal("PNG decoding failed");
+            delay(10000);
+            ESP.restart();
+        }
     }
     else // uncompressed BMP or Group5 compressed image
     {

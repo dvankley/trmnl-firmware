@@ -112,6 +112,11 @@ typedef struct epd_panel {
     uint16_t flags;
     uint8_t chip_type;
     const uint8_t *pColorLookup; // color translation table
+    const uint32_t *pRgbColorLookup; // RGB translation table for indexed PNGs
+    // For > 4 discrete color displays, the number of supported colors and the size of the
+    //  pColorLookup and pRgbColorLookup arrays
+    //  (should be a non-null entry in pColorLookup and pRgbColorLookup for each color)
+    const int iColorCount;
 } EPD_PANEL;
 
 // Products with built-in SPI EPDs
@@ -225,6 +230,7 @@ enum {
 #define BBEP_3COLOR   0x0004
 #define BBEP_4COLOR   0x0008
 #define BBEP_4GRAY    0x0010
+// ACeP 7 color
 #define BBEP_7COLOR   0x0020
 #define BBEP_16GRAY   0x0040
 #define BBEP_CS_EVERY_BYTE 0x0080
@@ -232,7 +238,16 @@ enum {
 #define BBEP_4BPP_DATA 0x0200
 #define BBEP_SPLIT_BUFFER 0x0400
 #define BBEP_HAS_SECOND_PLANE 0x0800
+// Spectra 6 OG: red, yellow, green, blue, black, and white
+#define BBEP_SPECTRA_6COLOR   0x1000
+// Spectra 6 2025 upgrade with T2000 chip. 6 base colors plus cyan, light green, and orange.
+// Unsure why press releases keep saying this is "eight colors."
+#define BBEP_SPECTRA_9COLOR   0x2000
 
+// Convenience macro for "full" "color" displays that share similar behavior.
+#define BBEP_FULL_COLOR     (BBEP_7COLOR | BBEP_SPECTRA_6COLOR | BBEP_SPECTRA_9COLOR)
+
+// ACEP color codes
 #define BBEP_BLACK 0
 #define BBEP_WHITE 1
 #define BBEP_YELLOW 2
@@ -241,6 +256,21 @@ enum {
 #define BBEP_GREEN 5
 #define BBEP_ORANGE 6
 #define BBEP_TRANSPARENT 255
+
+// Spectra 6 color codes
+#define BBEP_SPECTRA_BLACK   0x00
+#define BBEP_SPECTRA_WHITE   0x01
+#define BBEP_SPECTRA_YELLOW  0x02
+#define BBEP_SPECTRA_RED     0x03
+// Why no 4?
+#define BBEP_SPECTRA_BLUE    0x05
+#define BBEP_SPECTRA_GREEN   0x06
+// How is this different from white?
+#define BBEP_SPECTRA_CLEAN   0x07
+
+// Maximum color count/palette size supported.
+// This is used to allocate memory for palette operations.
+#define MAX_COLOR_COUNT 16
 
 // 4 gray levels
 #define BBEP_GRAY0 0
@@ -439,6 +469,14 @@ uint8_t iCS1Pin, iCS2Pin;
 uint8_t x_offset, y_offset; // memory offsets
 uint8_t is_awake, iPlane;
 const uint8_t *pColorLookup; // color translation table
+// Mapping between 24 bit RGB color codes and EPD colors
+// Each index in this array corresponds to the same index in pColorLookup
+const uint32_t *pRgbColorLookup;
+
+// For > 4 discrete color displays, the number of supported colors and the size of the
+//  pColorLookup and pRgbColorLookup arrays
+//  (should be a non-null entry in pColorLookup and pRgbColorLookup for each color)
+int iColorCount;
 const uint8_t *pInitFull; // full update init sequence
 const uint8_t *pInitFast; // fast update init sequence
 const uint8_t *pInitPart; // partial update init sequence
@@ -539,6 +577,9 @@ class BBEPAPER
     int getPlane(void);
     int getChip(void);
     void drawSprite(const uint8_t *pSprite, int cx, int cy, int iPitch, int x, int y, uint8_t iColor);    
+    const uint8_t* getColorLookup(void);
+    const uint32_t* getRgbColorLookup(void);
+    int getColorCount(void);
 #if !defined (ARDUINO)
     void print(const char *pString);
     void println(const char *pString);
