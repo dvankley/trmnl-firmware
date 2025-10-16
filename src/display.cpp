@@ -444,6 +444,8 @@ int png_draw(PNGDRAW *pDraw)
     // Handle indexed-color PNG rows for full-color-capable EPDs by translating
     // PNG palette indices -> EPD 4-bpp color codes using paletteMap, then pack
     // two pixels per byte (even x in high nibble, odd x in low nibble).
+
+    // Junie check this if block
     if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() & BBEP_FULL_COLOR)) {
         // int i;
         // int iPitch, iSize;
@@ -472,6 +474,7 @@ int png_draw(PNGDRAW *pDraw)
         // }
         // pBBEP->ucScreen[i] = u8;
 
+        bool moreLogging = pDraw->y == 200 || pDraw->y == 400;
 
         int width = pDraw->iWidth;
         int outLen = (width + 1) >> 1; // 2 pixels per byte
@@ -479,18 +482,33 @@ int png_draw(PNGDRAW *pDraw)
         const uint8_t *srcRow = s;   // 8-bit palette index per pixel from PNGdec
         uint8_t *dstRow = pTemp;     // output buffer to transmit to EPD
 
+        if (moreLogging) {
+            Log_info_serial("Rendering PNG line %d. Width: %d; out length: %d", pDraw->y, width, outLen);
+            esp_log_buffer_hex("palette map", &paletteMap, 6);
+        }
+
         x = 0;
         for (int i = 0; i < outLen; ++i) {
+            // This assumes 8bpp; update it to do it right
+            moreLogging = moreLogging && i < 5;
             // First (even) pixel -> high nibble
             uint8_t idx0 = (x < width) ? srcRow[x++] : 0;
-            uint8_t c0 = (idx0 < paletteMapSize) ? (paletteMap[idx0] & 0x0F) : 0x0; // default to 0 (usually white)
+            uint8_t c0 = (idx0 < paletteMapSize) ? paletteMap[idx0] : 0x0; // default to 0 (usually white)
+            if (moreLogging) {
+                Log_info_serial("Rendering PNG column %d; output byte: %d; png palette index: %X; color code: %X", x - 1, i, idx0, c0);
+            }
 
             // Second (odd) pixel -> low nibble
             uint8_t idx1 = (x < width) ? srcRow[x++] : 0;
-            uint8_t c1 = (idx1 < paletteMapSize) ? (paletteMap[idx1] & 0x0F) : 0x0;
+            uint8_t c1 = (idx1 < paletteMapSize) ? paletteMap[idx1] : 0x0;
+            if (moreLogging) {
+                Log_info_serial("PNG column: %d; png palette index: %X; color code: %X", x - 1, idx1, c1);
+            }
 
             dstRow[i] = (uint8_t)((c0 << 4) | c1);
-            // Log.info("%X", dstRow[i]);
+            if (moreLogging) {
+                Log_info_serial("Output rendered byte: %X into byte %d", (uint8_t)((c0 << 4) | c1), i);
+            }
         }
 
         esp_log_buffer_hex("png_line start", pTemp, 5);
@@ -567,12 +585,12 @@ static int uint32_array_search(const uint32_t *array, int size, uint32_t targetV
 
 static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
     return
-    // Blue
-    (pTripletStart[0]) |
+    // Red
+    (pTripletStart[0] << 16) |
     // Green
     (pTripletStart[1] << 8) |
-    // Red
-    (pTripletStart[2] << 16);
+    // Blue
+    (pTripletStart[2]);
 }
 
 /**
@@ -656,16 +674,19 @@ static void build_palette_map(
 
     int i = 0;
 
+    esp_log_buffer_hex("display rgb lookup table", bbep.getRgbColorLookup(), bbep.getColorCount() * 3);
     // Iterate over all PNG palette entries
     for (i = 0; i < pngPaletteSize; ++i) {
-        uint32_t pngPaletteEntry = png_palette_triplet_to_rgb888(&pngPalette[i]);
+        uint32_t pngPaletteEntry = png_palette_triplet_to_rgb888(&pngPalette[i*3]);
+        Log_info_serial("PNG palette entry index %d is %X", i, pngPaletteEntry);
         // Find the PNG palette entry in the display's list of supported PNG color codes
         int displayPngPaletteIndex = uint32_array_search(bbep.getRgbColorLookup(), bbep.getColorCount(), pngPaletteEntry);
+        Log_info_serial("PNG palette entry index %d index into display palette is %d", i, displayPngPaletteIndex);
 
         if (displayPngPaletteIndex < 0) {
             // PNG palette entry is not supported by the display
-            Log_error("WARNING: PNG palette entry %d with index %d is not in the device's supported color list."
-                " PNG pixels with this palette's entry index will be drawn to the display as blank.",
+            Log_error("WARNING: PNG palette entry %X with index %d is not in the device's supported color list."
+                " PNG pixels with this palette's entry index will be drawn to the display as the first color in the palette (probably black).",
                 pngPaletteEntry,
                 i
             );
