@@ -248,16 +248,16 @@ void bl_init(void)
 
   if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
   {
-    // Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
-    //
-    //
-    // display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
-    //
-    //
-    // need_to_refresh_display = 1;
-    // preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
-    // Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
-    // preferences.putString(PREFERENCES_FILENAME_KEY, "");
+      Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
+
+
+      display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
+
+
+      need_to_refresh_display = 1;
+      preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
+      Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
+      preferences.putString(PREFERENCES_FILENAME_KEY, "");
   }
 
   Log_info("Firmware version %s", FW_VERSION_STRING);
@@ -1816,6 +1816,8 @@ static void goToSleep(void)
   submitStoredLogs();
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.disconnect();
+    // Give WiFi stack a few ticks to do tear down stuff
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
   WiFi.mode(WIFI_OFF); 
   filesystem_deinit();
