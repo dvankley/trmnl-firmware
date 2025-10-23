@@ -58,7 +58,6 @@ uint8_t uc;
 //
 void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, uint8_t u8CS, uint8_t u8MOSI, uint8_t u8SCK, uint32_t u32Speed)
 {
-    Log_info_serial("bbepInitIO start");
     pBBEP->iDCPin = u8DC;
     pBBEP->iCSPin = u8CS;
     pBBEP->iMOSIPin = u8MOSI;
@@ -66,7 +65,6 @@ void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, ui
     pBBEP->iRSTPin = u8RST;
     pBBEP->iBUSYPin = u8BUSY;
 
-    Log_info_serial("bbepInitIO: setting pin modes");
     pinMode(pBBEP->iDCPin, OUTPUT);
     pinMode(pBBEP->iRSTPin, OUTPUT);
     digitalWrite(pBBEP->iRSTPin, LOW);
@@ -84,12 +82,10 @@ void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, ui
         pinMode(pBBEP->iCLKPin, OUTPUT);
     } else {
 #ifdef ARDUINO_ARCH_ESP32
-    Log_info_serial("bbepInitIO: SPI.begin");
         SPI.begin(pBBEP->iCLKPin, -1, pBBEP->iMOSIPin, -1); //pBBEP->iCSPin);
 #else
         SPI.begin(); // other architectures have fixed SPI pins
 #endif
-    Log_info_serial("bbepInitIO: SPI.beginTransaction");
         SPI.beginTransaction(SPISettings(u32Speed, MSBFIRST, SPI_MODE0));
 #ifdef ARDUINO_ARCH_ESP32
 // For NRF52, you have to leave an 'open' transaction
@@ -98,18 +94,16 @@ void bbepInitIO(BBEPDISP *pBBEP, uint8_t u8DC, uint8_t u8RST, uint8_t u8BUSY, ui
     }
     pBBEP->is_awake = 1;
 // Before we can start sending pixels, many panels need to know the display resolution
-    Log_info_serial("bbepInitIO: init ");
     bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
     if (pBBEP->iFlags & BBEP_FULL_COLOR) { // need to send before you can send it data
         if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {    
-            Log_info_serial("bbepInitIO: split buffer init");
            // Send the same sequence to the second controller
            pBBEP->iCSPin = pBBEP->iCS2Pin;
            bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
            pBBEP->iCSPin = pBBEP->iCS1Pin;
         }
     }
-    Log_info_serial("bbepInitIO: init display resolution complete");
+    Log_verbose("bbepInitIO: init display resolution complete");
 } /* bbepInitIO() */
 
 void bbepWriteIT8951Cmd(BBEPDISP *pBBEP, uint16_t cmd)

@@ -394,19 +394,12 @@ void ReduceBpp(int iDestBpp, int iPixelType, uint8_t *pPalette, uint8_t *pSrc, u
  */
 int png_draw(PNGDRAW *pDraw)
 {
-    static bool hasLogged = false;
     int x;
     uint8_t ucBppChanged = 0, ucInvert = 0;
     uint8_t uc, ucMask, src, *s, *d, *pTemp = bbep.getCache(); // get some scratch memory (not from the stack)
 
-    if (!hasLogged) {
-        Log_info("png_draw pixel type: %d; bpp: %d; ", pDraw->iPixelType, pDraw->iBpp);
-    }
     if (pDraw->iPixelType == PNG_PIXEL_INDEXED && pDraw->iBpp == 1) {
         // 1-bit output, just see which color is brighter
-        if (!hasLogged) {
-            Log_info("1bpp indexed");
-        }
         uint32_t u32Gray0, u32Gray1;
         u32Gray0 = pDraw->pPalette[0] + (pDraw->pPalette[1]<<2) + pDraw->pPalette[2];
         u32Gray1 = pDraw->pPalette[3] + (pDraw->pPalette[4]<<2) + pDraw->pPalette[5];
@@ -415,105 +408,75 @@ int png_draw(PNGDRAW *pDraw)
         }
     } else if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() | BBEP_FULL_COLOR)) {
         // "full" "color" display with indexed PNG (happy path for color displays)
-        if (!hasLogged) {
-            Log_info("Indexed PNG with full color display");
-        }
 
         if (paletteMapSize == 0) {
-            if (!hasLogged) {
-                Log_error("png_draw attempting to decode indexed PNG without palette map defined.");
-            }
             return 0;
         }
     } else if (pDraw->iBpp == 2) {
-        if (!hasLogged) {
-            Log_info("2bpp non-indexed; inverting for 4 gray");
-        }
         ucInvert = 0xff; // 2-bit non-palette images need to be inverted colors for 4-gray mode
     } else if (pDraw->iBpp > 2) {
-        if (!hasLogged) {
-            Log_info("bpp > 2; reducing to 1 or 2 bpp");
-        }
         // Reduce the source image to 1-bpp or 2-bpp
         ReduceBpp((pDraw->pUser) ? 2:1, pDraw->iPixelType, pDraw->pPalette, pDraw->pPixels, pTemp, pDraw->iWidth, pDraw->iBpp);
         ucBppChanged = 1;
     }
-    hasLogged = true;
     s = (ucBppChanged) ? pTemp : (uint8_t *)pDraw->pPixels;
     d = pTemp;
-    // Handle indexed-color PNG rows for full-color-capable EPDs by translating
-    // PNG palette indices -> EPD 4-bpp color codes using paletteMap, then pack
-    // two pixels per byte (even x in high nibble, odd x in low nibble).
 
-    // Junie check this if block
+    // Fast path for color-capable panels: convert PNG indexed pixels -> panel's 4-bpp format.
+    // - Input (s/srcRow): stream of palette indices from PNGdec. They may be packed (1,2,4 bpp) or byte-per-index (8 bpp).
+    // - Output (dstRow/pTemp): each byte holds two pixels: [hi nibble = even x, lo nibble = odd x].
+    // - Mapping: paletteMap[idx] -> 0..15 panel color code, prepared earlier by build_palette_map().
     if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() & BBEP_FULL_COLOR)) {
-        // int i;
-        // int iPitch, iSize;
-        // uint8_t u8;
-        // BBEPDISP *pBBEP = (BBEPDISP *)pb;
-        //
-        // // only available for local buffer operations
-        // if (!pBBEP || !pBBEP->ucScreen) return BBEP_ERROR_BAD_PARAMETER;
-        // ucColor = pBBEP->pColorLookup[ucColor & 0xf]; // translate the color for this display type
-        //
-        // iPitch = pBBEP->width >> 1;
-        // iSize = (pBBEP->native_width >> 1) * pBBEP->native_height;
-        //
-        // i = (x >> 1) + (y * iPitch);
-        // if (x < 0 || x >= pBBEP->width || i < 0 || i > iSize-1) { // off the screen
-        //     pBBEP->last_error = BBEP_ERROR_BAD_PARAMETER;
-        //     return BBEP_ERROR_BAD_PARAMETER;
-        // }
-        // u8 = pBBEP->ucScreen[i];
-        // if (x & 1) {
-        //     u8 &= 0xf0;
-        //     u8 |= ucColor;
-        // } else {
-        //     u8 &= 0x0f;
-        //     u8 |= (ucColor << 4);
-        // }
-        // pBBEP->ucScreen[i] = u8;
-
-        bool moreLogging = pDraw->y == 200 || pDraw->y == 400;
-
         int width = pDraw->iWidth;
-        int outLen = (width + 1) >> 1; // 2 pixels per byte
+        int outLen = (width + 1) >> 1; // ceil(width/2): 2 pixels per byte in 4-bpp output
 
-        const uint8_t *srcRow = s;   // 8-bit palette index per pixel from PNGdec
-        uint8_t *dstRow = pTemp;     // output buffer to transmit to EPD
+        const uint8_t *srcRow = s;   // palette index stream from PNGdec (packed per iBpp)
+        uint8_t *dstRow = pTemp;     // output buffer to transmit to EPD (4-bpp, 2 pixels per byte)
 
-        if (moreLogging) {
-            Log_info_serial("Rendering PNG line %d. Width: %d; out length: %d", pDraw->y, width, outLen);
-            esp_log_buffer_hex("palette map", &paletteMap, 6);
-        }
+        // Prepare a small bitstream reader for packed palette indices (PNG packs MSB-first within a byte).
+        const int bpp = pDraw->iBpp;               // 1, 2, 4, or 8 for indexed PNGs
+        const uint8_t mask = (bpp >= 8) ? 0xFF : (uint8_t)((1u << bpp) - 1u); // keep only 'bpp' bits
+        const uint8_t *sp = srcRow;                // source byte pointer into the palette-index stream
+        uint8_t cur = (bpp == 8) ? 0 : *sp++;      // current source byte when bpp < 8
+        int bitsLeft = (bpp == 8) ? 0 : 8;         // how many unread bits remain in 'cur'
 
+        // Reads the next palette index. When we run past the row width, return 0 so the leftover nibble is padded with '0' (typically white).
+        auto read_index = [&](bool have_pixels_left) -> uint8_t {
+            if (!have_pixels_left) {
+                return 0;       // pad with 0 beyond row width (odd-width rows)
+            }
+            if (bpp == 8) {
+                return *sp++;                      // trivial case: one index per byte
+            }
+            if (bitsLeft == 0) {
+                // refill bit bucket
+                cur = *sp++;
+                bitsLeft = 8;
+            }
+            auto idx = (uint8_t)((cur >> (8 - bpp)) & mask); // take the next 'bpp' MSBs
+            cur <<= bpp;                           // consume the bits we just used
+            bitsLeft -= bpp;
+            return idx;
+        };
+
+        // Pack two mapped pixels per output byte: 0xAB where A=c0 (even x), B=c1 (odd x)
         x = 0;
         for (int i = 0; i < outLen; ++i) {
-            // This assumes 8bpp; update it to do it right
-            moreLogging = moreLogging && i < 5;
             // First (even) pixel -> high nibble
-            uint8_t idx0 = (x < width) ? srcRow[x++] : 0;
-            uint8_t c0 = (idx0 < paletteMapSize) ? paletteMap[idx0] : 0x0; // default to 0 (usually white)
-            if (moreLogging) {
-                Log_info_serial("Rendering PNG column %d; output byte: %d; png palette index: %X; color code: %X", x - 1, i, idx0, c0);
-            }
+            uint8_t idx0 = read_index(x < width);
+            if (x < width) ++x;
+            // Map PNG palette index -> panel color code (0..15). If index is out of range, default to 0
+            uint8_t c0 = (idx0 < paletteMapSize) ? paletteMap[idx0] : 0x0;
 
             // Second (odd) pixel -> low nibble
-            uint8_t idx1 = (x < width) ? srcRow[x++] : 0;
+            uint8_t idx1 = read_index(x < width);
+            if (x < width) ++x;
             uint8_t c1 = (idx1 < paletteMapSize) ? paletteMap[idx1] : 0x0;
-            if (moreLogging) {
-                Log_info_serial("PNG column: %d; png palette index: %X; color code: %X", x - 1, idx1, c1);
-            }
 
-            dstRow[i] = (uint8_t)((c0 << 4) | c1);
-            if (moreLogging) {
-                Log_info_serial("Output rendered byte: %X into byte %d", (uint8_t)((c0 << 4) | c1), i);
-            }
+            dstRow[i] = (uint8_t)((c0 << 4) | c1); // [c0|c1] packed into a single byte
         }
 
-        esp_log_buffer_hex("png_line start", pTemp, 5);
-        esp_log_buffer_hex("png_line end", pTemp + outLen - 5, 5);
-        // Send the packed 4-bpp row to the panel and return; skip 1/2-bpp paths below
+        // Transmit the packed 4-bpp row to the panel and exit;
         bbep.writeData(pTemp, outLen);
         return 1;
     }
@@ -601,7 +564,7 @@ static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
  *
  * TODO: write a unit test for this once I can sort out the tooling
  * @param pPalette PNGDRAW::pPalette pointer. 768 bytes where each set of 3 bytes is
- *  blue, green, red values to define a single color in the palette.
+ *  red, green, blue values to define a single color in the palette.
  * Bytes 769-1024 are alpha values, but we don't care about those for this application.
  * @return number of actually used entries (colors) in the palette.
  */
@@ -645,19 +608,9 @@ static int get_palette_size(uint8_t *pPalette) {
  *  to the model's display's palette. This is because the server is expected to do all
  *  necessary processing to prepare the image for the EPD, specifically quantization/dithering.
  *
- *
- * @param displayPngPalette Array of PNG color codes supported by the current model's display.
- * @param displayColorCodes Array of display color codes supported by the current model's display.
- *  Indexes match displayPngPalette.
- * @param displayPaletteSize Size of displayPngPalette and displayColorCodes.
  * @param pngPalette Array of palette values defined in the indexed PNG file being decoded
  */
-static void build_palette_map(
-    // const uint32_t displayPngPalette[],
-    // const uint8_t displayColorCodes[],
-    // int displayPaletteSize,
-    uint8_t pngPalette[]
-) {
+static void build_palette_map(uint8_t pngPalette[]) {
     int pngPaletteSize = get_palette_size(pngPalette);
     if (pngPaletteSize <= 0) {
         Log_error("Unable to determine palette size for indexed PNG");
@@ -700,26 +653,6 @@ static void build_palette_map(
 
     paletteMapSize = i;
 }
-
-// static void build_palette_map(PNG *png) {
-//     // TODO: move this mapping into #defines
-//     if (bbep.capabilities() | BBEP_7COLOR) {
-//         build_palette_map_for_device(
-//             acep_7clr_rgb_palette,
-//             u8Colors_7clr,
-//             7,
-//             png->getPalette()
-//         );
-//     } else if (bbep.capabilities() | BBEP_SPECTRA_6COLOR) {
-//         build_palette_map_for_device(
-//             spectra_6clr_rgb_palette,
-//             u8Colors_spectra6,
-//             6,
-//             png->getPalette()
-//         );
-//     }
-//     // TODO: } else if (bbep.capabilities() | BBEP_SPECTRA_9COLOR) {
-// }
 
 //
 // A table to accelerate the testing of 2-bit images for the number
@@ -886,15 +819,18 @@ PNG *png = new PNG();
                 //  sitting around in global memory even when not needed.
                 build_palette_map(png->getPalette());
 
-                bbep.startWrite(PLANE_0); // start writing image data to plane 0
+                // Send "data start transmission" command
+                bbep.startWrite(PLANE_0);
+
+                // Allocate RAM and set decode callback
                 png->openRAM((uint8_t *)pPNG, iDataSize, png_draw);
+                // Actually do the decoding (the callback will write image data to the EPD as it's decoded)
                 if (png->decode(&iPlane, 0) != PNG_SUCCESS) {
                     Log_error("Plane 0 decode failed: %d", png->getLastError());
                     png->close();
                     return -1;
                 }
-                png->close(); // start over for plane 1
-                // bbep.writePlane();
+                png->close();
             } else {
                 Log_info("Unhandled display configuration");
                 rc = -1;
@@ -1282,10 +1218,12 @@ void display_show_msg(uint8_t *image_buffer, MSG message_type)
 void display_show_msg(uint8_t *image_buffer, MSG message_type, String friendly_id, bool id, const char *fw_version, String message)
 {
     Log_info("Free heap in display_show_msg - %d", ESP.getFreeHeap());
+    Log_info("Free PSRAM in display_show_msg - %d", ESP.getFreePsram());
     Log_info("maximum_compatibility = %d\n", apiDisplayResult.response.maximum_compatibility);
 #ifdef BB_EPAPER
     bbep.allocBuffer(false);
     Log_info("Free heap after bbep.allocBuffer(): %d", ESP.getFreeHeap());
+    Log_info("Free PSRAM after bbep.allocBuffer(): %d", ESP.getFreePsram());
 #endif
 
     if (message_type == WIFI_CONNECT)

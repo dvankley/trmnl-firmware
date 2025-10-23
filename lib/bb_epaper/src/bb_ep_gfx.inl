@@ -283,7 +283,7 @@ void bbepDrawSprite(BBEPDISP *pBBEP, const uint8_t *pSprite, int cx, int cy, int
         int iDestPitch;
         // start writing into the correct plane
         if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-            if (pBBEP->iFlags & BBEP_RED_SWAPPED) {
+            if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_FULL_COLOR)) {
                 u8CMD1 = UC8151_DTM1;
                 u8CMD2 = UC8151_DTM2;
             } else {
@@ -1361,7 +1361,7 @@ int bbepWriteStringCustom(BBEPDISP *pBBEP, void *pFont, int x, int y, char *szMs
                 iPitch = (w+7)/8;
                 // start writing into the correct plane
                 if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-                    if (pBBEP->iFlags & BBEP_RED_SWAPPED) {
+                    if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_FULL_COLOR)) {
                         u8CMD1 = UC8151_DTM1;
                         u8CMD2 = UC8151_DTM2;
                     } else {
@@ -1525,7 +1525,7 @@ int bbepWriteString(BBEPDISP *pBBEP, int x, int y, char *szMsg, int iSize, int i
         iBG = pBBEP->pColorLookup[iBG & 0xf];
     }
     if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-        if (pBBEP->iFlags & BBEP_RED_SWAPPED) {
+        if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_FULL_COLOR)) {
             ucCMD1 = UC8151_DTM1;
             ucCMD2 = UC8151_DTM2;
         } else {
@@ -1893,7 +1893,6 @@ void bbepGetStringBox(BBEPDISP *pBBEP, BB_FONT *pFont, const char *szMsg, int *w
 int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
 {
 #ifndef NO_RAM
-    Log_info_serial("bbepAllocBuffer: RAM block");
     int iSize;
     if (pBBEP->iFlags & (BBEP_FULL_COLOR | BBEP_16GRAY)) { // 4-bpp
         iSize = (pBBEP->native_width >> 1) * pBBEP->native_height;
@@ -1904,7 +1903,6 @@ int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
             pBBEP->iFlags |= BBEP_HAS_SECOND_PLANE;
         }
     }
-    Log_info_serial("bbepAllocBuffer: trying to allocate %d; second plane: %d", iSize, bDoubleSize);
 #if defined (HAL_ESP32_HAL_H_) && !defined(__riscv)
 //     if (iSize > 98000) { // need to use PSRAM
 // #ifndef BOARD_HAS_PSRAM
@@ -1913,18 +1911,17 @@ int bbepAllocBuffer(BBEPDISP *pBBEP, int bDoubleSize)
 //     Log_info_serial("bbepAllocBuffer: ps_malloc");
 //         pBBEP->ucScreen = (uint8_t *)ps_malloc(iSize);
 //     } else {
-    Log_info_serial("bbepAllocBuffer: malloc");
         pBBEP->ucScreen = (uint8_t *)malloc(iSize);
     // }
 #else // not ESP32 or no PSRAM
-    Log_info_serial("bbepAllocBuffer: no PSRAM; malloc");
+    Log_verbose("bbepAllocBuffer: no PSRAM; malloc");
     pBBEP->ucScreen = (uint8_t *)malloc(iSize);
 #endif // ESP32
     if (pBBEP->ucScreen != NULL) {
         return BBEP_SUCCESS;
     }
 #endif
-    Log_info_serial("bbepAllocBuffer: memory allocation failed");
+    Log_error("bbepAllocBuffer: memory allocation failed");
     return BBEP_ERROR_NO_MEMORY; // failed
 } /* bbepAllocBuffer() */
 //

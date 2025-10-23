@@ -2793,15 +2793,13 @@ void bbepWaitBusy(BBEPDISP *pBBEP)
     if (pBBEP->iBUSYPin == 0xff) return;
     delay(10); // give time for the busy status to be valid
     uint8_t busy_idle =  (pBBEP->chip_type == BBEP_CHIP_UC81xx) ? HIGH : LOW;
-    Log_info_serial("bbepWaitBusy: waiting for pin %d to be %d", pBBEP->iBUSYPin, busy_idle);
+    Log_verbose("bbepWaitBusy: waiting for pin %d to be %d", pBBEP->iBUSYPin, busy_idle);
     delay(1); // some panels need a short delay before testing the BUSY line
     while (iTimeout < 5000) {
         if (digitalRead(pBBEP->iBUSYPin) == busy_idle) break;
-        // delay(1);
-        // Log_info_serial("bbepWaitBusy: waiting");
         iTimeout += 200;
-        delay(200);
-        // bbepLightSleep(200); // save battery power by checking every 200ms
+        // delay(200);
+        bbepLightSleep(200); // save battery power by checking every 200ms
     }
 } /* bbepWaitBusy() */
 //
@@ -2963,8 +2961,7 @@ void bbepStartWrite(BBEPDISP *pBBEP, int iPlane)
     
     if (!pBBEP) return;
     if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-        // TODO: check ACeP command code to see if this can just be the FULL_COLOR macro instead
-        if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_SPECTRA_6COLOR | BBEP_SPECTRA_9COLOR)) {
+        if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_FULL_COLOR)) {
             if (iPlane == PLANE_0)
                 u8Cmd = UC8151_DTM1;
             else
@@ -2981,7 +2978,7 @@ void bbepStartWrite(BBEPDISP *pBBEP, int iPlane)
         else
             u8Cmd = SSD1608_WRITE_ALTRAM;
     }
-    Log_info_serial("bbepStartWrite: command byte %X", u8Cmd);
+    Log_verbose("bbepStartWrite: command byte %X", u8Cmd);
     bbepWriteCmd(pBBEP, (uint8_t)u8Cmd);
 } /* bbepStartWrite() */
 
@@ -2999,17 +2996,17 @@ void bbepSendCMDSequence(BBEPDISP *pBBEP, const uint8_t *pSeq)
     while (s[0] != 0) { // A 0 length terminates the list
         iLen = *s++;
         if (iLen == BUSY_WAIT) {
-            Log_info_serial("bbepSendCMDSequence: busy wait");
+            Log_verbose("bbepSendCMDSequence: busy wait");
             bbepWaitBusy(pBBEP);
         } else if (iLen == EPD_RESET) {
-            Log_info_serial("bbepSendCMDSequence: reset");
+            Log_verbose("bbepSendCMDSequence: reset");
             bbepWakeUp(pBBEP);
         } else {
-            // Log_info_serial("bbepSendCMDSequence: write command %h", s[0]);
+            // Log_verbose("bbepSendCMDSequence: write command %h", s[0]);
             bbepWriteCmd(pBBEP, s[0]);
             s++;
             if (iLen > 1) {
-            // Log_info_serial("bbepSendCMDSequence: write data");
+            // Log_verbose("bbepSendCMDSequence: write data");
                 bbepWriteData(pBBEP, s, iLen-1);
                 s += (iLen-1);
             }
@@ -3120,7 +3117,7 @@ void bbepFill(BBEPDISP *pBBEP, unsigned char ucColor, int iPlane)
             }
         }
         if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-            if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_4COLOR)) {
+            if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_4COLOR | BBEP_FULL_COLOR)) {
                 ucCMD1 = UC8151_DTM1;
                 ucCMD2 = UC8151_DTM2;
             } else {
@@ -3158,7 +3155,7 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
     
     switch (iMode) {
         case REFRESH_FULL:
-            Log_info_serial("bbepRefresh: full");
+            Log_verbose("bbepRefresh: full");
             bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
             if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {
                // Send the same sequence to the second controller
@@ -3169,15 +3166,15 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
             break;
         case REFRESH_FAST:
             if (!pBBEP->pInitFast) { // fall back to full
-                Log_info_serial("bbepRefresh: fast requested, but falling back to full");
+                Log_verbose("bbepRefresh: fast requested, but falling back to full");
                 bbepSendCMDSequence(pBBEP, pBBEP->pInitFull);
             } else if (!(pBBEP->iFlags & BBEP_4COLOR)) {
-                Log_info_serial("bbepRefresh: fast");
+                Log_verbose("bbepRefresh: fast");
                 bbepSendCMDSequence(pBBEP, pBBEP->pInitFast);
             }
             break;
         case REFRESH_PARTIAL:
-            Log_info_serial("bbepRefresh: partial");
+            Log_verbose("bbepRefresh: partial");
             if (!pBBEP->pInitPart)
                 return BBEP_ERROR_BAD_PARAMETER;
             bbepSendCMDSequence(pBBEP, pBBEP->pInitPart);
@@ -3186,37 +3183,29 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
             return BBEP_ERROR_BAD_PARAMETER;
     } // switch on mode
     if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-        Log_info_serial("bbepRefresh: BBEP_CHIP_UC81xx");
         if (pBBEP->iFlags & (BBEP_4GRAY | BBEP_4COLOR | BBEP_FULL_COLOR)) {
-            Log_info_serial("bbepRefresh: > 2 colors");
             bbepCMD2(pBBEP, UC8151_DRF, 0x00);
             if (pBBEP->iFlags & BBEP_SPLIT_BUFFER) {
-                Log_info_serial("bbepRefresh: split buffer");
                // Send the same sequence to the second controller
                pBBEP->iCSPin = pBBEP->iCS2Pin;
                bbepCMD2(pBBEP, UC8151_DRF, 0);
                pBBEP->iCSPin = pBBEP->iCS1Pin;
             }
         } else {
-            Log_info_serial("bbepRefresh: <= 2 colors");
             if (pBBEP->pInitPart) {
-                Log_info_serial("bbepRefresh: sending UC8151_PTOU");
                 bbepWriteCmd(pBBEP, UC8151_PTOU); // partial out (update the entire panel, not just the last memory window)
             }
             bbepWriteCmd(pBBEP, UC8151_DRF);
         }
     } else {
-        Log_info_serial("bbepRefresh: non BBEP_CHIP_UC81xx");
         const uint8_t u8CMD[4] = {0xf7, 0xc7, 0xff, 0xc0}; // normal, fast, partial, partial2
         const uint8_t u8CMDz[4] = {0xf4, 0xc7, 0xfc, 0}; // special set for SSD1680
         const uint8_t u8CMDz2[4] = {0xf4, 0xc7, 0xdc, 0}; // special set #2 for SSD1680
         const uint8_t u8CMDz3[4] = {0xf7, 0xc7, 0xdc, 0}; // special set #3
         if (pBBEP->iFlags & (BBEP_4GRAY | BBEP_3COLOR | BBEP_4COLOR)) {
-            Log_info_serial("bbepRefresh: iMode = REFRESH_FAST");
             iMode = REFRESH_FAST;
         } // 3/4-color = 0xc7
         if (iMode == REFRESH_PARTIAL && pBBEP->iFlags & BBEP_PARTIAL2) {
-            Log_info_serial("bbepRefresh: iMode = REFRESH_PARTIAL2");
             iMode = REFRESH_PARTIAL2; // special case for custom LUT
         }
         if (pBBEP->type == EP29Z_128x296 || pBBEP->type == EP213Z_122x250) {
@@ -3228,7 +3217,6 @@ int bbepRefresh(BBEPDISP *pBBEP, int iMode)
         } else {
             bbepCMD2(pBBEP, SSD1608_DISP_CTRL2, u8CMD[iMode]);
         }
-        Log_info_serial("bbepRefresh: writing SSD1608_MASTER_ACTIVATE");
         bbepWriteCmd(pBBEP, SSD1608_MASTER_ACTIVATE); // refresh
     }
     return BBEP_SUCCESS;
@@ -3870,7 +3858,7 @@ int bbepWritePlane(BBEPDISP *pBBEP, int iPlane, int bInvert)
         return BBEP_SUCCESS;
     }
     if (pBBEP->chip_type == BBEP_CHIP_UC81xx) {
-        if (pBBEP->iFlags & BBEP_RED_SWAPPED) {
+        if (pBBEP->iFlags & (BBEP_RED_SWAPPED | BBEP_FULL_COLOR)) {
             ucCMD1 = UC8151_DTM1;
             ucCMD2 = UC8151_DTM2;
         } else {

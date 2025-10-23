@@ -98,6 +98,7 @@ ApiDisplayResult fetchApiDisplay(ApiDisplayInputs &apiDisplayInputs)
         size_t size = https->getSize();
         Log_info("Content size: %d", size);
         Log_info("Free heap size: %d", ESP.getFreeHeap());
+        Log_info("Free PSRAM size: %d", ESP.getFreePsram());
         Log_info("Payload - %s", payload.c_str());
 
         auto apiResponse = parseResponse_apiDisplay(payload);

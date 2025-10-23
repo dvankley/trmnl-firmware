@@ -829,6 +829,7 @@ static https_request_err_e downloadAndShow()
               writeImageToFile("/current.bmp", buffer, content_size);
             }
             Log.info("Free heap at before display - %d", ESP.getFreeHeap());
+            Log.info("Free PSRAM at before display - %d", ESP.getFreePsram());
             display_show_image(buffer, content_size, true);
 
             // Using filename from API response
@@ -2075,7 +2076,7 @@ static uint8_t *storedLogoOrDefault(int iType)
 //    return buffer;
 //  }
   if (iType == 0) {
-    return const_cast<uint8_t *>(bwr_test);
+    return const_cast<uint8_t *>(spectra_6_test_bars);
   } else {
     // Force the loading screen to always use the slower update method because
     // we don't know (yet) if the panel can handle the faster update modes
