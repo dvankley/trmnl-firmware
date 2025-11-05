@@ -90,7 +90,7 @@ enum WIFI_CONNECT_RETRY_TIME // Time to sleep before trying to connect to the Wi
 #define VBAT_SWITCH_LEVEL HIGH  //load switch enable pin active level
 #elif defined(BOARD_GOOD_DISPLAY_ESP32E6_E01)
 #define DEVICE_MODEL "good_display_esp32e6_e01"
-#define PIN_INTERRUPT 46         // Corresponds to SW2
+#define PIN_INTERRUPT 9         // Corresponds to SW3. Must be this pushbutton because it's the only one connected to an RTC GPIO.
 #define FAKE_BATTERY_VOLTAGE    // I should probably connect the battery to an ADC input in the next version
 #endif
 
