@@ -671,6 +671,10 @@ static https_request_err_e downloadAndShow()
           Log_info("GET...");
           Log_info("RSSI: %d", WiFi.RSSI());
           // start connection and send HTTP header
+
+          // Ensure the HTTP connection won’t be kept alive and cause an error when
+          //  tearing down the wifi software and hardware before going to sleep.
+          https.setReuse(false);
           int httpCode = https.GET();
           int content_size = https.getSize();
           uint8_t *buffer_old = nullptr; // Disable partial update for now
@@ -732,8 +736,22 @@ static https_request_err_e downloadAndShow()
 
             return HTTPS_WRONG_IMAGE_SIZE;
           }
-          WiFi.disconnect(true); // no need for WiFi, save power starting here
-          Log.info("%s [%d]: Received successfully; WiFi off; WiFi off\r\n", __FILE__, __LINE__);
+            // Close HTTP/TCP cleanly
+            https.end();
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            // Bring the station down but keep the driver running
+            WiFi.disconnect(false);
+
+            // Give a few ticks for disconnect to be processed on the wifi task
+            vTaskDelay(pdMS_TO_TICKS(100));
+
+            // Now it’s safe to power the radio down
+            WiFi.mode(WIFI_OFF);
+
+          // https.end();
+          // WiFi.disconnect(true); // no need for WiFi, save power starting here
+          Log.info("%s [%d]: Received successfully; WiFi off\r\n", __FILE__, __LINE__);
           bool bmp_rename = false;
 
           if (filesystem_file_exists("/current.bmp") || filesystem_file_exists("/current.png"))
