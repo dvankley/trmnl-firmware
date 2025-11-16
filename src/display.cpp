@@ -406,7 +406,7 @@ int png_draw(PNGDRAW *pDraw)
         if (u32Gray0 < u32Gray1) {
             ucInvert = 0xff;
         }
-    } else if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() | BBEP_FULL_COLOR)) {
+    } else if (pDraw->iPixelType == PNG_PIXEL_INDEXED && (bbep.capabilities() & BBEP_FULL_COLOR)) {
         // "full" "color" display with indexed PNG (happy path for color displays)
 
         if (paletteMapSize == 0) {
@@ -559,6 +559,12 @@ static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
 /**
  * Gets the number of actually used entries in the palette (PNG PLTE) table by the crude
  *  means of just iterating through the array until we find a null entry.
+ *
+ * This algorithm is unable to distinguish between a palette with a black (0x000000) entry
+ *  at the end and a palette with no black entry.
+ * It will always interpret that case as a black entry at the end because an extra palette
+ *  entry has no negative effect.
+ *
  * Future improvement: store the size of the palette in PNGDRAW on image decode so we
  *  don't have to do this crap.
  *
@@ -569,28 +575,24 @@ static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
  * @return number of actually used entries (colors) in the palette.
  */
 static int get_palette_size(uint8_t *pPalette) {
+    bool haveSeenBlack = false;
     if (!pPalette) {
         return -1;
     }
-    // Stop only on a 0,0,0 triplet that is immediately
-    // followed by another 0,0,0 (or we're at the last entry). This treats
-    // a single 0,0,0 (true black) followed by non-zero as a valid color.
     int count = 0;
     for (int i = 0; i < 256; ++i) {
         const int idx = i * 3;
         if (png_palette_triplet_to_rgb888(&pPalette[idx]) == 0) {
-            // Peek at the next triplet if available
-            if (i >= 255) { // no next triplet; treat as terminator
+            if (haveSeenBlack) {
+                // If we've already recorded a black palette entry, then we're done here
                 break;
+            } else {
+                // If we haven't seen a full black palette entry so far, now we have
+                haveSeenBlack = true;
+                // Move on because this was a valid color.
+                ++count;
+                continue;
             }
-            int nextIdx = idx + 3;
-            if (png_palette_triplet_to_rgb888(&pPalette[nextIdx]) == 0) {
-                // Two consecutive null triplets -> end of palette
-                break;
-            }
-            // Single 0,0,0 followed by non-zero -> count it (black) and continue
-            ++count;
-            continue;
         }
         ++count;
     }
