@@ -246,19 +246,23 @@ void bl_init(void)
   Log.info("Filesystem init\n");
   filesystem_init();
 
-  if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
-  {
-      Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
-
-
-      display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
-
-
-      need_to_refresh_display = 1;
-      preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
-      Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
-      preferences.putString(PREFERENCES_FILENAME_KEY, "");
-  }
+    // I'm not entirely sure what's causing this, but the Good Display Spectra 6 seems to drop
+    //  its busy line before it's fully done displaying an image, so two display operations
+    //  in short succession result in the second being ignored.
+    // In this case the command to display the actual target image is ignored as the display is
+    //  still working on the logo command.
+    // This block is being commented out for now as a hack to work around this issue.
+    // if (wakeup_reason != ESP_SLEEP_WAKEUP_TIMER)
+    // {
+    //     Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
+    //
+    //     display_show_image(storedLogoOrDefault(0), DEFAULT_IMAGE_SIZE, true);
+    //
+    //     need_to_refresh_display = 1;
+    //     preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
+    //     Log.info("%s [%d]: Display TRMNL logo end\r\n", __FILE__, __LINE__);
+    //     preferences.putString(PREFERENCES_FILENAME_KEY, "");
+    // }
 
   Log_info("Firmware version %s", FW_VERSION_STRING);
   Log_info("Arduino version %d.%d.%d", ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH);
