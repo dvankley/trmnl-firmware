@@ -35,8 +35,8 @@
 #include <nvs.h>
 #include <serialize_log.h>
 #include <preferences_persistence.h>
-// #include "logo_small.h"
-#include "bwr_test_image.h"
+#include "logo_small.h"
+#include "logo_medium.h"
 #include "loading.h"
 #include <wifi-helpers.h>
 
@@ -77,7 +77,6 @@ static void checkAndPerformFirmwareUpdate(void);     // OTA update
 static void goToSleep(void);                         // sleep preparing
 static bool setClock(void);                          // clock synchronization
 static float readBatteryVoltage(void);               // battery voltage reading
-static void submitOrSaveLogString(const char *log_buffer, size_t size); // log sending
 static void submitStoredLogs(void);
 static void writeSpecialFunction(SPECIAL_FUNCTION function);
 static void writeImageToFile(const char *name, uint8_t *in_buffer, size_t size);
@@ -91,15 +90,19 @@ static bool checkCurrentFileName(String &newName);
 static DeviceStatusStamp getDeviceStatusStamp();
 void log_nvs_usage();
 
+static unsigned long startup_time = 0;
 
-void wait_for_serial()
-{
+void wait_for_serial() {
 #ifdef WAIT_FOR_SERIAL
-  for (int i = 10; i > 0 && !Serial; i--)
-  {
-    Log_info("## Waiting for serial.. %d", i);
-    delay(1000);
-  }
+  int idx = 0;
+  unsigned long start = millis();
+  while (millis() - start < 2000) {
+      if (Serial)
+        break;
+      delay(100);
+      idx++;
+    }
+  Log_info("## Waited for serial.. %d ms", idx * 100);
 #endif
 }
 
@@ -110,6 +113,7 @@ void wait_for_serial()
  */
 void bl_init(void)
 {
+  startup_time = millis();
   Serial.begin(115200);
   Log.begin(LOG_LEVEL_VERBOSE, &Serial);
   Log_info("BL init success");
@@ -269,6 +273,11 @@ void bl_init(void)
   Log_info("ESP-IDF version %d.%d.%d", ESP_IDF_VERSION_MAJOR, ESP_IDF_VERSION_MINOR, ESP_IDF_VERSION_PATCH);
   list_files();
   log_nvs_usage();
+
+  // DEBUG - test message display
+  // showMessageWithLogo(MSG_FORMAT_ERROR);
+  // display_show_msg(storedLogoOrDefault(1), WIFI_CONNECT, "ABCDEF", true, FW_VERSION_STRING, "Hello World!");
+  // wifiErrorDeepSleep();
 
   WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
 
@@ -455,7 +464,7 @@ void bl_init(void)
   {
     if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
     {
-      showMessageWithLogo(API_ERROR);
+      showMessageWithLogo(API_REQUEST_FAILED);
     }
     else
     {
@@ -472,7 +481,7 @@ void bl_init(void)
   {
     if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
     {
-      showMessageWithLogo(API_ERROR);
+      showMessageWithLogo(API_UNABLE_TO_CONNECT);
     }
     else
     {
@@ -630,7 +639,7 @@ static https_request_err_e downloadAndShow()
 
   https_request_err_e result = handleApiDisplayResponse(apiDisplayResult.response);
 
-  auto withHttpResult = withHttp(
+  withHttp(
       filename,
       [&](HTTPClient *httpsp, HttpError error) -> https_request_err_e
       {
@@ -645,6 +654,15 @@ static https_request_err_e downloadAndShow()
         https.setTimeout(15000);
         https.setConnectTimeout(15000);
 
+        https.addHeader("Accept-Encoding", "identity"); // Disable compression for raw image data
+
+        // Include ID and Access Token if the image is hosted on the same server as the API
+        if (strncmp(filename, apiDisplayInputs.baseUrl.c_str(), apiDisplayInputs.baseUrl.length()) == 0)
+        {
+          https.addHeader("ID", apiDisplayInputs.macAddress);
+          https.addHeader("Access-Token", apiDisplayInputs.apiKey);
+        }
+        
         if (status && !update_firmware && !reset_firmware)
         {
           status = false;
@@ -681,8 +699,18 @@ static https_request_err_e downloadAndShow()
           https.setReuse(false);
           int httpCode = https.GET();
           int content_size = https.getSize();
-          uint8_t *buffer_old = nullptr; // Disable partial update for now
-          int file_size_old = 0;
+          if(httpCode == HTTP_CODE_PERMANENT_REDIRECT ||
+            httpCode == HTTP_CODE_TEMPORARY_REDIRECT){
+              https.end();
+              https.begin(API_BASE_URL +https.getLocation());
+              Log_info("Redirected to: %s", https.getLocation().c_str());
+              https.setTimeout(15000);
+              https.setConnectTimeout(15000);
+              httpCode = https.GET();
+              content_size = https.getSize();
+            }
+//          uint8_t *buffer_old = nullptr; // Disable partial update for now
+//          int file_size_old = 0;
 
           // httpCode will be negative on error
           if (httpCode < 0)
@@ -701,29 +729,48 @@ static https_request_err_e downloadAndShow()
             Log_error_submit("[HTTPS] GET... failed, code: %d (%s)", httpCode, https.errorToString(httpCode).c_str());
             return HTTPS_REQUEST_FAILED;
           }
+          
           Log.info("%s [%d]: Content size: %d\r\n", __FILE__, __LINE__, https.getSize());
 
           uint32_t counter = 0;
-          if (content_size > MAX_IMAGE_SIZE)
-          {
-            //Log_error_submit("Receiving failed; file size too big");
-            Log.info("%s [%d]: Receiving failed; file size too big: %d\r\n", __FILE__, __LINE__, content_size);
-            result = HTTPS_IMAGE_FILE_TOO_BIG;
-            return HTTPS_REQUEST_FAILED;
-          }
-          WiFiClient *stream = https.getStreamPtr();
-          Log.info("%s [%d]: RSSI: %d\r\n", __FILE__, __LINE__, WiFi.RSSI());
-          Log.info("%s [%d]: Stream timeout: %d\r\n", __FILE__, __LINE__, stream->getTimeout());
 
-          Log.info("%s [%d]: Stream available (may show as 0 and that's okay): %d\r\n", __FILE__, __LINE__, stream->available());
+          if (content_size <= 0)
+          {
+            Log.warning("%s [%d]: Content-Length not provided (size: %d)\r\n", __FILE__, __LINE__, content_size);
+          }
 
           bool isPNG = https.header("Content-Type") == "image/png";
+          bool isJPEG = https.header("Content-Type") == "image/jpeg";
 
           Log.info("%s [%d]: Starting a download at: %d\r\n", __FILE__, __LINE__, getTime());
           heap_caps_check_integrity_all(true);
-          buffer = (uint8_t *)malloc(content_size);
 
-          counter = downloadStream(stream, content_size, buffer);
+          // getString() handles chunked transfer encoding automatically
+          String payload = https.getString();
+          counter = payload.length();
+
+          if (counter == 0)
+          {
+            Log_error_submit("Receiving failed. No data received");
+            return HTTPS_WRONG_IMAGE_SIZE;
+          }
+
+          if (counter > MAX_IMAGE_SIZE)
+          {
+            Log_error_submit("Receiving failed; file size too big: %d", counter);
+            return HTTPS_IMAGE_FILE_TOO_BIG;
+          }
+
+          buffer = (uint8_t *)malloc(counter);
+
+          if (buffer == NULL)
+          {
+            Log_error_submit("Failed to allocate %d bytes for image buffer", counter);
+            return HTTPS_OUT_OF_MEMORY;
+          }
+
+          memcpy(buffer, payload.c_str(), counter);
+          content_size = counter;
 
           if (counter >= 2 && buffer[0] == 'B' && buffer[1] == 'M')
           {
@@ -731,8 +778,7 @@ static https_request_err_e downloadAndShow()
             Log.info("BMP file detected");
           }
 
-          if (counter != content_size)
-          {
+          submitStoredLogs();
 
             Log_error_submit("Receiving failed. Read: %d", counter);
 
@@ -772,10 +818,10 @@ static https_request_err_e downloadAndShow()
           }
 
           bool image_reverse = false;
-          if (isPNG)
+          if (isPNG || isJPEG)
           {
             writeImageToFile("/current.png", buffer, content_size);
-            Log.info("%s [%d]: Decoding png\r\n", __FILE__, __LINE__);
+            Log.info("%s [%d]: Decoding %s\r\n", __FILE__, __LINE__, (isPNG) ? "png" : "jpeg");
             display_show_image(buffer, content_size, true);
 //            delay(100);
 //            free(buffer);
@@ -790,9 +836,9 @@ static https_request_err_e downloadAndShow()
           }
           Serial.println();
           String error = "";
-          uint8_t *imagePointer = buffer;
+         // uint8_t *imagePointer = buffer;
 //          uint8_t *imagePointer = (decodedPng == nullptr) ? buffer : decodedPng;
-          bool lastImageExists = filesystem_file_exists("/last.bmp") || filesystem_file_exists("/last.png");
+        //  bool lastImageExists = filesystem_file_exists("/last.bmp") || filesystem_file_exists("/last.png");
 
           switch (png_res)
           {
@@ -926,14 +972,22 @@ uint32_t downloadStream(WiFiClient *stream, int content_size, uint8_t *buffer)
   int iteration_counter = 0;
   int counter2 = content_size;
   unsigned long download_start = millis();
+  unsigned long last_data_time = millis();
   int counter = 0;
-  while (counter != content_size && millis() - download_start < 10000)
+
+  while (counter < content_size && millis() - download_start < 30000)
   {
     if (stream->available())
     {
       Log.info("%s [%d]: Downloading... Available bytes: %d\r\n", __FILE__, __LINE__, stream->available());
-      counter += stream->readBytes(buffer + counter, counter2 -= counter);
+      int bytes_to_read = min(stream->available(), counter2 - counter);
+      counter += stream->readBytes(buffer + counter, bytes_to_read);
       iteration_counter++;
+      last_data_time = millis();
+    }
+    else if (!stream->connected() || millis() - last_data_time > 5000)
+    {
+      break;
     }
     delay(10);
   }
@@ -1273,7 +1327,6 @@ https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse)
         String action = apiResponse.action;
         if (action.equals("rewind"))
         {
-          bool isPNG = false;
           status = false;
           result = HTTPS_SUCCESS;
           Log.info("%s [%d]: rewind success\r\n", __FILE__, __LINE__);
@@ -1294,7 +1347,6 @@ https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse)
           }
           else if (last_dot_file == "/last.png")
           {
-            isPNG = true;
             Log.info("Rewind PNG\n\r");
             buffer = display_read_file(last_dot_file.c_str(), &file_size);
             image_proccess_response = PNG_NO_ERR; // DEBUG
@@ -1350,7 +1402,6 @@ https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse)
 
         if (action.equals("send_to_me"))
         {
-          bool isPNG = false;
           status = false;
           result = HTTPS_SUCCESS;
           Log.info("%s [%d]: send_to_me success\r\n", __FILE__, __LINE__);
@@ -1555,7 +1606,7 @@ static bool performApiSetup()
   {
     if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
     {
-      showMessageWithLogo(API_ERROR);
+      showMessageWithLogo(API_SETUP_FAILED);
     }
     else
     {
@@ -1638,7 +1689,7 @@ static void downloadSetupImage()
     {
       if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
       {
-        showMessageWithLogo(API_ERROR);
+        showMessageWithLogo(API_IMAGE_DOWNLOAD_ERROR);
       }
       else
       {
@@ -1656,12 +1707,21 @@ static void downloadSetupImage()
 
     int httpCode = https->GET();
 
+    if(httpCode == HTTP_CODE_PERMANENT_REDIRECT ||httpCode == HTTP_CODE_TEMPORARY_REDIRECT){
+              https->end();
+              https->begin(https->getLocation());
+              Log_info("Redirected to: %s", https->getLocation().c_str());
+              https->setTimeout(15000);
+              https->setConnectTimeout(15000);
+              httpCode = https->GET();
+            }
+
     // httpCode will be negative on error
     if (httpCode <= 0)
     {
       if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
       {
-        showMessageWithLogo(API_ERROR);
+        showMessageWithLogo(API_IMAGE_DOWNLOAD_ERROR);
       }
       else
       {
@@ -1679,7 +1739,7 @@ static void downloadSetupImage()
     {
       if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
       {
-        showMessageWithLogo(API_ERROR);
+        showMessageWithLogo(API_IMAGE_DOWNLOAD_ERROR);
       }
       else
       {
@@ -1780,7 +1840,7 @@ static void checkAndPerformFirmwareUpdate(void)
                Log.fatal("%s [%d]: Unable to connect for firmware update\r\n", __FILE__, __LINE__);
                if (WiFi.RSSI() > WIFI_CONNECTION_RSSI)
                {
-                 showMessageWithLogo(API_ERROR);
+                 showMessageWithLogo(API_FIRMWARE_UPDATE_ERROR);
                }
                else
                {
@@ -1846,6 +1906,7 @@ static void goToSleep(void)
   uint32_t time_to_sleep = SLEEP_TIME_TO_SLEEP;
   if (preferences.isKey(PREFERENCES_SLEEP_TIME_KEY))
     time_to_sleep = preferences.getUInt(PREFERENCES_SLEEP_TIME_KEY, SLEEP_TIME_TO_SLEEP);
+  Log.info("%s [%d]: total awake time - %d ms\r\n", __FILE__, __LINE__, millis() - startup_time); 
   Log.info("%s [%d]: time to sleep - %d\r\n", __FILE__, __LINE__, time_to_sleep);
   preferences.putUInt(PREFERENCES_LAST_SLEEP_TIME, getTime());
   preferences.end();
@@ -2065,17 +2126,16 @@ static void writeSpecialFunction(SPECIAL_FUNCTION function)
   }
 }
 
-static void showMessageWithLogo(MSG message_type) {
-  display_show_msg(storedLogoOrDefault(0), message_type);
-  need_to_refresh_display = 1;
-  preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
-}
-
 static void showMessageWithLogo(MSG message_type, String friendly_id, bool id, const char *fw_version, String message)
 {
   display_show_msg(storedLogoOrDefault(0), message_type, friendly_id, id, fw_version, message);
   need_to_refresh_display = 1;
   preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
+}
+
+static void showMessageWithLogo(MSG message_type)
+{
+  display_show_msg(storedLogoOrDefault(0), message_type);
 }
 
 /**
@@ -2099,6 +2159,9 @@ static uint8_t *storedLogoOrDefault(int iType)
 //  {
 //    return buffer;
 //  }
+#ifdef BOARD_TRMNL_X
+    return const_cast<uint8_t *>(logo_medium);
+#else
   if (iType == 0) {
     return const_cast<uint8_t *>(spectra_6_test_bars);
   } else {
@@ -2107,6 +2170,7 @@ static uint8_t *storedLogoOrDefault(int iType)
     apiDisplayResult.response.maximum_compatibility = true;
     return const_cast<uint8_t *>(loading);
   }
+#endif
 }
 
 static bool saveCurrentFileName(String &name)
@@ -2259,3 +2323,17 @@ void log_nvs_usage()
     Log_error("Failed to get NVS stats: %s", esp_err_to_name(ret));
   }
 }
+
+void Test_new_screens(void){
+    showMessageWithLogo(API_ERROR);
+    delay(000);
+    showMessageWithLogo(API_REQUEST_FAILED);
+    delay(2000);
+    showMessageWithLogo(API_IMAGE_DOWNLOAD_ERROR);
+    delay(2000);
+    showMessageWithLogo(API_FIRMWARE_UPDATE_ERROR);
+    delay(2000);
+    showMessageWithLogo(API_SETUP_FAILED);
+    delay(2000);
+    showMessageWithLogo(API_UNABLE_TO_CONNECT);
+};
