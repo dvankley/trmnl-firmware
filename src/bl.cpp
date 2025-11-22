@@ -39,6 +39,7 @@
 #include "logo_medium.h"
 #include "loading.h"
 #include <wifi-helpers.h>
+#include "bwr_test_image.h"
 
 bool pref_clear = false;
 String new_filename = "";
@@ -729,7 +730,7 @@ static https_request_err_e downloadAndShow()
             Log_error_submit("[HTTPS] GET... failed, code: %d (%s)", httpCode, https.errorToString(httpCode).c_str());
             return HTTPS_REQUEST_FAILED;
           }
-          
+
           Log.info("%s [%d]: Content size: %d\r\n", __FILE__, __LINE__, https.getSize());
 
           uint32_t counter = 0;
@@ -780,12 +781,6 @@ static https_request_err_e downloadAndShow()
 
           submitStoredLogs();
 
-            Log_error_submit("Receiving failed. Read: %d", counter);
-
-            // display_show_msg(const_cast<uint8_t *>(default_icon), API_SIZE_ERROR);
-
-            return HTTPS_WRONG_IMAGE_SIZE;
-          }
             // Close HTTP/TCP cleanly
             https.end();
             vTaskDelay(pdMS_TO_TICKS(100));

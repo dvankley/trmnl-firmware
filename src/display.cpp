@@ -742,6 +742,133 @@ int i, iColors;
     return iColors;
 } /* png_count_colors() */
 
+/**
+ * Simple linear array search.
+ *
+ * @param array Search array (haystack)
+ * @param size Size of the search array
+ * @param targetValue Value to search for (needle)
+ * @return Index of target value in array, or -1 if not found.
+ */
+static int uint32_array_search(const uint32_t *array, int size, uint32_t targetValue) {
+    for (int i = 0; i < size; ++i) {
+        if (array[i] == targetValue) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static uint32_t png_palette_triplet_to_rgb888(const uint8_t *pTripletStart) {
+    return
+    // Red
+    (pTripletStart[0] << 16) |
+    // Green
+    (pTripletStart[1] << 8) |
+    // Blue
+    (pTripletStart[2]);
+}
+
+/**
+ * Gets the number of actually used entries in the palette (PNG PLTE) table by the crude
+ *  means of just iterating through the array until we find a null entry.
+ *
+ * This algorithm is unable to distinguish between a palette with a black (0x000000) entry
+ *  at the end and a palette with no black entry.
+ * It will always interpret that case as a black entry at the end because an extra palette
+ *  entry has no negative effect.
+ *
+ * Future improvement: store the size of the palette in PNGDRAW on image decode so we
+ *  don't have to do this crap.
+ *
+ * TODO: write a unit test for this once I can sort out the tooling
+ * @param pPalette PNGDRAW::pPalette pointer. 768 bytes where each set of 3 bytes is
+ *  red, green, blue values to define a single color in the palette.
+ * Bytes 769-1024 are alpha values, but we don't care about those for this application.
+ * @return number of actually used entries (colors) in the palette.
+ */
+static int get_palette_size(uint8_t *pPalette) {
+    bool haveSeenBlack = false;
+    if (!pPalette) {
+        return -1;
+    }
+    int count = 0;
+    for (int i = 0; i < 256; ++i) {
+        const int idx = i * 3;
+        if (png_palette_triplet_to_rgb888(&pPalette[idx]) == 0) {
+            if (haveSeenBlack) {
+                // If we've already recorded a black palette entry, then we're done here
+                break;
+            } else {
+                // If we haven't seen a full black palette entry so far, now we have
+                haveSeenBlack = true;
+                // Move on because this was a valid color.
+                ++count;
+                continue;
+            }
+        }
+        ++count;
+    }
+    return count;
+}
+
+/**
+ * Builds the paletteMap global variable and sets the corresponding paletteMapSize global variable.
+ *
+ * For "full" "color" displays, this function must be called before attempting to decode
+ *  and write to the EPD display.
+ *
+ * The assumption here is that for "full color" displays, the server should only ever
+ *  provide PNG images with color mode = indexed, where the palette exactly corresponds
+ *  to the model's display's palette. This is because the server is expected to do all
+ *  necessary processing to prepare the image for the EPD, specifically quantization/dithering.
+ *
+ * @param pngPalette Array of palette values defined in the indexed PNG file being decoded
+ */
+static void build_palette_map(uint8_t pngPalette[]) {
+    int pngPaletteSize = get_palette_size(pngPalette);
+    if (pngPaletteSize <= 0) {
+        Log_error("Unable to determine palette size for indexed PNG");
+        // TODO: restart the MCU or something more fatal
+        return;
+    }
+
+    // Validate that the PNG's palette is the same size as the display's palette
+    if (pngPaletteSize != bbep.getColorCount()) {
+        // If it's not, we'll still give it a go, but this is not expected behavior.
+        Log_error("WARNING: PNG palette size %d does not equal the palette size expected by this model's display %d",
+            pngPaletteSize, bbep.getColorCount());
+    }
+
+    int i = 0;
+
+    esp_log_buffer_hex("display rgb lookup table", bbep.getRgbColorLookup(), bbep.getColorCount() * 3);
+    // Iterate over all PNG palette entries
+    for (i = 0; i < pngPaletteSize; ++i) {
+        uint32_t pngPaletteEntry = png_palette_triplet_to_rgb888(&pngPalette[i*3]);
+        Log_info_serial("PNG palette entry index %d is %X", i, pngPaletteEntry);
+        // Find the PNG palette entry in the display's list of supported PNG color codes
+        int displayPngPaletteIndex = uint32_array_search(bbep.getRgbColorLookup(), bbep.getColorCount(), pngPaletteEntry);
+        Log_info_serial("PNG palette entry index %d index into display palette is %d", i, displayPngPaletteIndex);
+
+        if (displayPngPaletteIndex < 0) {
+            // PNG palette entry is not supported by the display
+            Log_error("WARNING: PNG palette entry %X with index %d is not in the device's supported color list."
+                " PNG pixels with this palette's entry index will be drawn to the display as the first color in the palette (probably black).",
+                pngPaletteEntry,
+                i
+            );
+            paletteMap[i] = 0x00;
+            continue;
+        }
+
+        // Write to the palette map
+        paletteMap[i] = bbep.getColorLookup()[displayPngPaletteIndex];
+    }
+
+    paletteMapSize = i;
+}
+
 /** 
  * @brief JPEGDEC callback function passed blocks of MCUs (minimum coded units)
  * @param pointer to the JPEGDRAW structure
